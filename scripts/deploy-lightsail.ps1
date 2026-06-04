@@ -74,10 +74,17 @@ try {
 
 if (-not (Test-Path $KeyPath)) {
   if ($existingKey) {
-    throw "Lightsail key pair '$KeyName' already exists, but $KeyPath is missing. Delete/recreate the key pair or provide the PEM file at that path."
+    Write-Host "Lightsail key pair '$KeyName' exists but local PEM is missing. Recreating key pair..."
+    AwsJson @("lightsail", "delete-key-pair", "--region", $Region, "--key-pair-name", $KeyName) | Out-Null
+    Start-Sleep -Seconds 2
   }
   $createdKey = AwsJson @("lightsail", "create-key-pair", "--region", $Region, "--key-pair-name", $KeyName)
-  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($createdKey.privateKeyBase64)) | Set-Content -NoNewline -Path $KeyPath
+  $privateKey = [string]$createdKey.privateKeyBase64
+  if ($privateKey -match "-----BEGIN") {
+    $privateKey | Set-Content -NoNewline -Path $KeyPath
+  } else {
+    [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($privateKey)) | Set-Content -NoNewline -Path $KeyPath
+  }
   icacls $KeyPath /inheritance:r /grant:r "$env:USERNAME`:R" | Out-Null
 }
 
