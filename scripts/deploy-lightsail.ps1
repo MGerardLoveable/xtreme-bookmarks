@@ -97,7 +97,7 @@ XTREME_BOOKMARKS_WEB_PASSWORD=$WebPassword
 
 $userData = @"
 #!/usr/bin/env bash
-set -euxo pipefail
+set -eux
 
 apt-get update
 apt-get install -y ca-certificates curl git nginx
@@ -172,7 +172,7 @@ systemctl restart xtreme-bookmarks || true
 "@
 
 $userDataPath = Join-Path $DeployDir "lightsail-user-data.sh"
-$userData | Set-Content -Path $userDataPath -Encoding UTF8
+$userData | Set-Content -Path $userDataPath -Encoding ASCII
 
 $instance = $null
 try {
@@ -214,6 +214,10 @@ for ($i = 0; $i -lt 60; $i++) {
   if ($LASTEXITCODE -eq 0) { break }
   Start-Sleep -Seconds 10
 }
+
+Write-Host "Provisioning Lightsail instance..."
+scp -o StrictHostKeyChecking=accept-new -i $KeyPath $userDataPath "ubuntu@${PublicIp}:/tmp/xtreme-bookmarks-provision.sh"
+ssh -i $KeyPath "ubuntu@$PublicIp" "sudo bash /tmp/xtreme-bookmarks-provision.sh"
 
 if (-not $SkipDataUpload) {
   if (-not (Test-Path $DataDir)) {
