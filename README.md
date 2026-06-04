@@ -4,6 +4,10 @@ Sync and store your X/Twitter bookmarks locally, browse them in the Xtreme Bookm
 
 Local-first by default: your bookmark database, media cache, generated markdown, and credentials stay on your machine unless you choose to deploy them.
 
+## Why this exists
+
+X bookmarks are where many builders, researchers, and maintainers collect fast-moving technical knowledge, but the native product makes that knowledge hard to search, preserve, cite, and turn into durable project memory. Xtreme Bookmarks turns a personal bookmark archive into a local, searchable knowledge base with CLI workflows, a web UI, wiki export, and agent-friendly context.
+
 ## Install
 
 Requires Node.js 20+. Chrome, Brave, or Firefox can be used for browser-session bookmark sync; OAuth/API credentials are optional for features that need official X API access.
@@ -169,19 +173,19 @@ Session sync extracts cookies from your browser's local database. Use `ft sync -
 
 **The default sync uses X's internal GraphQL API**, the same API that x.com uses in your browser. For the official v2 API, use `ft auth` + `ft sync --api`.
 
+## Maintainer workflows
+
+This project is maintained as a practical OSS tool for local-first research and agent workflows:
+
+- Keep X/Twitter technical bookmarks available outside the platform.
+- Build searchable SQLite/FTS5 indexes and markdown knowledge bases from saved posts.
+- Support Chrome, Brave, and Firefox session sync where available, with OAuth/API fallback.
+- Give coding agents a stable `/fieldtheory` skill surface for retrieving relevant saved context.
+- Keep private user data out of the repository by default.
+
 ## License
 
-MIT — [fieldtheory.dev/cli](https://fieldtheory.dev/cli)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=afar1%2Ffieldtheory-cli&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=afar1/fieldtheory-cli&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=afar1/fieldtheory-cli&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=afar1/fieldtheory-cli&type=date&legend=top-left" />
- </picture>
-</a>
+MIT
 
 
 ## Ideas & Library Rail
