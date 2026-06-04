@@ -3,19 +3,35 @@ $ErrorActionPreference = "Stop"
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Port = 3847
 $Url = "http://localhost:$Port/"
+$StatsUrl = "http://localhost:$Port/api/stats"
 $OutLog = Join-Path $ProjectDir "web-server-3847.out.log"
 $ErrLog = Join-Path $ProjectDir "web-server-3847.err.log"
 
 function Test-XtremeBookmarks {
   try {
-    $response = Invoke-WebRequest -UseBasicParsing $Url -TimeoutSec 3
-    return ($response.StatusCode -eq 200 -and $response.Content -match "Xtreme Bookmarks")
+    $page = Invoke-WebRequest -UseBasicParsing $Url -TimeoutSec 3
+    if (-not ($page.StatusCode -eq 200 -and $page.Content -match "Xtreme Bookmarks")) {
+      return $false
+    }
+
+    $stats = Invoke-WebRequest -UseBasicParsing $StatsUrl -TimeoutSec 8
+    return ($stats.StatusCode -eq 200 -and $stats.Content -match "totalBookmarks")
   } catch {
     return $false
   }
 }
 
 if (-not (Test-XtremeBookmarks)) {
+  $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  foreach ($listener in $listeners) {
+    try {
+      $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)"
+      if ($proc.CommandLine -match "xtreme-bookmarks" -or $proc.CommandLine -match "bin/ft\.mjs web") {
+        Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
+      }
+    } catch {}
+  }
+
   $env:XTREME_BOOKMARKS_NO_OPEN = "1"
   Start-Process `
     -FilePath "node" `
