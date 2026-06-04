@@ -456,6 +456,52 @@ interface Filters {
   readStatus?: string;
 }
 
+interface WebAuthConfig {
+  enabled: boolean;
+  username: string;
+  password: string;
+}
+
+function getWebAuthConfig(): WebAuthConfig {
+  const password = process.env.XTREME_BOOKMARKS_WEB_PASSWORD || process.env.XB_WEB_PASSWORD || '';
+  const username = process.env.XTREME_BOOKMARKS_WEB_USER || process.env.XB_WEB_USER || 'xtreme';
+  return { enabled: password.length > 0, username, password };
+}
+
+function safeCompare(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function isRequestAuthorized(req: http.IncomingMessage, auth: WebAuthConfig): boolean {
+  if (!auth.enabled) return true;
+  const header = String(req.headers.authorization || '');
+  if (!header.startsWith('Basic ')) return false;
+
+  let decoded = '';
+  try {
+    decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf8');
+  } catch {
+    return false;
+  }
+
+  const splitAt = decoded.indexOf(':');
+  if (splitAt < 0) return false;
+  const username = decoded.slice(0, splitAt);
+  const password = decoded.slice(splitAt + 1);
+  return safeCompare(username, auth.username) && safeCompare(password, auth.password);
+}
+
+function requestWebAuth(res: http.ServerResponse): void {
+  res.writeHead(401, {
+    'Content-Type': 'application/json',
+    'WWW-Authenticate': 'Basic realm="Xtreme Bookmarks", charset="UTF-8"',
+    'Cache-Control': 'no-store',
+  });
+  res.end(JSON.stringify({ error: 'Authentication required' }));
+}
+
 function buildWhere(filters: Filters): { where: string; params: (string | number)[] } {
   const conds: string[] = [];
   const params: (string | number)[] = [];
@@ -1946,6 +1992,7 @@ async function autoUpdateXWatchlist(state: { db: Database }, dbPath: string): Pr
 
 export async function startWebServer(port: number = 3848): Promise<void> {
   loadEnv();
+  const auth = getWebAuthConfig();
   const dbPath = twitterBookmarksIndexPath();
   if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: ft sync && ft index'); process.exitCode = 1; return; }
   const state = { db: await openDb(dbPath) };
@@ -1979,6 +2026,16 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
+    if (req.method === 'GET' && (pathname === '/healthz' || pathname === '/api/healthz')) {
+      sendJson(res, { ok: true, app: 'xtreme-bookmarks' });
+      return;
+    }
+
+    if (!isRequestAuthorized(req, auth)) {
+      requestWebAuth(res);
+      return;
+    }
+
     try {
       if (pathname.startsWith('/api/')) { await handleApi(state.db, dbPath, req, res, url, pathname, state); return; }
 
@@ -2008,6 +2065,7 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   server.listen(port, () => {
     const url = `http://localhost:${port}`;
     console.log(`\n  Xtreme Bookmarks 2nd Brain Web UI running at ${url}`);
+    if (auth.enabled) console.log(`  Web access is password protected for user "${auth.username}".`);
     openBrowser(url);
   });
 

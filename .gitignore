@@ -24,6 +24,7 @@ media/
 md/
 schema.md
 .preferences
+.deploy/
 
 # Logs and temporary diagnostics
 *.log
