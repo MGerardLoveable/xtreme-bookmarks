@@ -31,9 +31,17 @@ function New-Password {
 }
 
 function AwsJson {
-  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-  $json = & aws @Arguments --output json
-  if ($LASTEXITCODE -ne 0) { throw "aws $($Arguments -join ' ') failed." }
+  param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
+  $flat = @()
+  foreach ($arg in $Arguments) {
+    if ($arg -is [Array]) {
+      foreach ($item in $arg) { $flat += [string]$item }
+    } else {
+      $flat += [string]$arg
+    }
+  }
+  $json = & aws @flat --output json
+  if ($LASTEXITCODE -ne 0) { throw "aws $($flat -join ' ') failed." }
   if ([string]::IsNullOrWhiteSpace($json)) { return $null }
   return $json | ConvertFrom-Json
 }
