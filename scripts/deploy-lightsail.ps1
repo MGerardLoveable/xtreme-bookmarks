@@ -4,6 +4,7 @@ param(
   [string]$AvailabilityZone = "us-west-2a",
   [string]$BlueprintId = "ubuntu_24_04",
   [string]$BundleId = "micro_3_0",
+  [string]$StaticIpName = "xtreme-bookmarks-ip",
   [string]$RepositoryUrl = "https://github.com/MGerardLoveable/xtreme-bookmarks.git",
   [string]$WebUser = "xtreme",
   [string]$WebPassword = "",
@@ -207,6 +208,21 @@ for ($i = 0; $i -lt 60; $i++) {
   if ($PublicIp) { break }
 }
 if (-not $PublicIp) { throw "Instance did not receive a public IP in time." }
+
+$staticIp = $null
+try {
+  $staticIp = AwsJson @("lightsail", "get-static-ip", "--region", $Region, "--static-ip-name", $StaticIpName)
+} catch {}
+if (-not $staticIp) {
+  AwsJson @("lightsail", "allocate-static-ip", "--region", $Region, "--static-ip-name", $StaticIpName) | Out-Null
+  $staticIp = AwsJson @("lightsail", "get-static-ip", "--region", $Region, "--static-ip-name", $StaticIpName)
+}
+if ([string]$staticIp.staticIp.attachedTo -ne $InstanceName) {
+  AwsJson @("lightsail", "attach-static-ip", "--region", $Region, "--static-ip-name", $StaticIpName, "--instance-name", $InstanceName) | Out-Null
+  Start-Sleep -Seconds 10
+  $staticIp = AwsJson @("lightsail", "get-static-ip", "--region", $Region, "--static-ip-name", $StaticIpName)
+}
+$PublicIp = [string]$staticIp.staticIp.ipAddress
 
 Write-Host "Waiting for SSH..."
 for ($i = 0; $i -lt 60; $i++) {
