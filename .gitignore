@@ -1,0 +1,51 @@
+# Dependencies / build output
+node_modules/
+dist/
+*.js.map
+
+# Secrets and local machine config
+.env
+.env.*
+!.env.example
+
+# Xtreme Bookmarks local data lives outside the repo by default, but keep
+# defensive ignores here in case someone copies it into the project folder.
+.xtreme-bookmarks/
+bookmarks.db
+bookmarks.db*
+bookmarks.jsonl
+bookmarks.jsonl*
+bookmarks-meta.json
+browser-session-cache.json
+bookmarks-backfill-state.json
+oauth-token.json
+media-manifest.json
+media/
+md/
+schema.md
+.preferences
+
+# Logs and temporary diagnostics
+*.log
+*.err
+*.out
+server_log.txt
+web-server-*.log
+tmp-*.log
+oauth-auth.*.log
+
+# Local screenshots/debug artifacts
+x-login.png
+debug-*.mjs
+debug-*.ts
+diag.ts
+test-copy*.ps1
+test-import.ts
+check-schema.ts
+-
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

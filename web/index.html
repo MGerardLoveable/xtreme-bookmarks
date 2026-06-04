@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-density="comfortable">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xtreme Bookmarks · v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/views.css?v=20260530-notepad-icon">
+</head>
+<body>
+  <!-- Top bar -->
+  <header class="topbar" role="banner">
+    <div class="topbar-left">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Xtreme<span class="brand-dot">.</span></span>
+        <span class="brand-tag">2nd&nbsp;Brain</span>
+      </div>
+    </div>
+
+    <nav class="tabs" role="tablist" aria-label="Primary">
+      <button class="tab" role="tab" data-view="library" aria-selected="true">
+        <span data-icon="library"></span><span class="tab-label">Library</span>
+      </button>
+      <button class="tab" role="tab" data-view="ask" aria-selected="false">
+        <span data-icon="sparkles"></span><span class="tab-label">Ask</span>
+      </button>
+      <button class="tab" role="tab" data-view="graph" aria-selected="false">
+        <span data-icon="network"></span><span class="tab-label">Graph</span>
+      </button>
+      <button class="tab" role="tab" data-view="brain" aria-selected="false">
+        <span data-icon="brain-circuit"></span><span class="tab-label">Brain</span>
+      </button>
+      <button class="tab" role="tab" data-view="xfeed" aria-selected="false">
+        <span data-icon="bell"></span><span class="tab-label">X Feed</span>
+      </button>
+      <button class="tab" role="tab" data-view="maintenance" aria-selected="false">
+        <span data-icon="shield-check"></span><span class="tab-label">Maintenance</span>
+      </button>
+      <button class="tab" role="tab" data-view="insights" aria-selected="false">
+        <span data-icon="bar-chart-3"></span><span class="tab-label">Insights</span>
+      </button>
+    </nav>
+
+    <div class="topbar-right">
+      <button class="icon-btn" id="grab-btn" title="Grab new bookmarks" aria-label="Grab new bookmarks">
+        <span data-icon="download-cloud"></span>
+      </button>
+      <button class="icon-btn" id="palette-btn" title="Command palette (Ctrl+K)" aria-label="Command palette">
+        <span data-icon="search"></span>
+      </button>
+      <button class="icon-btn" id="density-btn" title="Toggle density" aria-label="Toggle density">
+        <span data-icon="rows-3"></span>
+      </button>
+      <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">
+        <span data-icon="moon"></span>
+      </button>
+      <button class="icon-btn" id="help-btn" title="Shortcuts (?)" aria-label="Keyboard shortcuts">
+        <span data-icon="circle-help"></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main workspace -->
+  <main class="workspace" id="workspace" role="main">
+    <!-- Views mount here -->
+    <section class="view" data-view="library" hidden></section>
+    <section class="view" data-view="ask" hidden></section>
+    <section class="view" data-view="graph" hidden></section>
+    <section class="view" data-view="brain" hidden></section>
+    <section class="view" data-view="xfeed" hidden></section>
+    <section class="view" data-view="maintenance" hidden></section>
+    <section class="view" data-view="insights" hidden></section>
+  </main>
+
+  <!-- Status bar -->
+  <footer class="statusbar" role="contentinfo">
+    <span class="status-item" id="status-total">—</span>
+    <span class="status-sep">·</span>
+    <span class="status-item" id="status-unread">—</span>
+    <span class="status-sep">·</span>
+    <span class="status-item" id="status-authors">—</span>
+    <span class="status-spacer"></span>
+    <span class="status-item status-hint">Press <kbd>?</kbd> for shortcuts · <kbd>Ctrl</kbd>+<kbd>K</kbd> to search</span>
+  </footer>
+
+  <!-- Command palette -->
+  <div class="palette-overlay" id="palette" hidden>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="palette-input-wrap">
+        <span data-icon="search" class="palette-icon"></span>
+        <input class="palette-input" id="palette-input" type="text" placeholder="Search bookmarks, authors, categories, or commands…" autocomplete="off" spellcheck="false">
+        <kbd class="palette-esc">Esc</kbd>
+      </div>
+      <div class="palette-results" id="palette-results" role="listbox"></div>
+    </div>
+  </div>
+
+  <!-- Help overlay -->
+  <div class="help-overlay" id="help-overlay" hidden>
+    <div class="help-panel" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <header class="help-header">
+        <h2>Keyboard shortcuts</h2>
+        <button class="icon-btn" id="help-close" aria-label="Close"><span data-icon="x"></span></button>
+      </header>
+      <div class="help-body">
+        <section>
+          <h3>Navigation</h3>
+          <ul>
+            <li><kbd>g</kbd> <kbd>l</kbd> Library</li>
+            <li><kbd>g</kbd> <kbd>a</kbd> Ask</li>
+            <li><kbd>g</kbd> <kbd>g</kbd> Graph</li>
+            <li><kbd>g</kbd> <kbd>b</kbd> Brain</li>
+            <li><kbd>g</kbd> <kbd>x</kbd> X Feed</li>
+            <li><kbd>g</kbd> <kbd>m</kbd> Maintenance</li>
+            <li><kbd>g</kbd> <kbd>i</kbd> Insights</li>
+          </ul>
+        </section>
+        <section>
+          <h3>Library</h3>
+          <ul>
+            <li><kbd>/</kbd> Focus search</li>
+            <li><kbd>j</kbd> / <kbd>k</kbd> Next / previous</li>
+            <li><kbd>Enter</kbd> Open original</li>
+            <li><kbd>e</kbd> Toggle read</li>
+            <li><kbd>u</kbd> Unread filter</li>
+          </ul>
+        </section>
+        <section>
+          <h3>Global</h3>
+          <ul>
+            <li><kbd>Ctrl</kbd>+<kbd>K</kbd> Command palette</li>
+            <li><kbd>t</kbd> Toggle theme</li>
+            <li><kbd>d</kbd> Toggle density</li>
+            <li><kbd>w</kbd> Browse wiki</li>
+            <li><kbd>?</kbd> This panel</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast" hidden></div>
+
+  <!-- Cytoscape + Lucide (loaded on demand in modules) -->
+  <script type="module" src="js/app.js?v=20260530-xfeed-mode-toggle"></script>
+
+  <!-- Floating Capture Button -->
+  <button class="fab" id="fab-capture" title="Capture idea (Ctrl+Shift+N)" aria-label="Capture new idea">
+    <img src="assets/notepad-icon-512.png" alt="" aria-hidden="true">
+  </button>
+
+  <!-- Global Notepad Modal -->
+  <div class="modal-overlay" id="notepad-modal" hidden>
+    <div class="modal notepad-modal" role="dialog" aria-modal="true" aria-labelledby="notepad-title-heading">
+      <header class="modal-header">
+        <div>
+          <div class="modal-kicker">Quick Capture</div>
+          <h2 id="notepad-title-heading">Save a thought to your Brain</h2>
+          <p>Capture the useful bit now. You can organize it later.</p>
+        </div>
+        <button class="icon-btn" id="notepad-modal-close" title="Close" aria-label="Close Quick Capture"><span data-icon="x"></span></button>
+      </header>
+      <div class="modal-body">
+        <label class="capture-field">
+          <span>Title</span>
+          <input type="text" class="input capture-input" id="global-notepad-title" placeholder="Optional short title">
+        </label>
+        <label class="capture-field">
+          <span>Tags</span>
+          <input type="text" class="input capture-input" id="global-notepad-tags" placeholder="ai, x-feed, idea">
+        </label>
+        <label class="capture-field capture-field-note">
+          <span>Note</span>
+          <textarea class="notepad-textarea capture-textarea" id="global-notepad-text" placeholder="Write the idea, quote, action, or pattern you want to remember..." rows="8"></textarea>
+        </label>
+      </div>
+      <footer class="modal-footer">
+        <div class="capture-save-state" id="global-notepad-state">Drafts stay on this device until added.</div>
+        <div class="capture-actions">
+          <button class="btn" id="global-notepad-save">Save Draft</button>
+          <button class="btn btn-primary" id="global-notepad-add">Add to Brain</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+</body>
+</html>

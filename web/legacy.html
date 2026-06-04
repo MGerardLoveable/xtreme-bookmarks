@@ -1,0 +1,2779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Xtreme Bookmarks — 2nd Brain Hub</title>
+<!-- Mermaid.js for Knowledge Graph -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: false, theme: 'neutral' });</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #f5efe5;
+  --surface: rgba(255,255,255,0.68);
+  --surface-2: rgba(255,255,255,0.5);
+  --surface-3: rgba(35,43,56,0.06);
+  --border: rgba(35,43,56,0.12);
+  --border-light: rgba(35,43,56,0.2);
+  --text: #1d2530;
+  --text-2: #485566;
+  --text-3: #7b8796;
+  --accent: #245c73;
+  --accent-hover: #163f52;
+  --accent-subtle: rgba(36,92,115,0.1);
+  --accent-glow: rgba(36,92,115,0.16);
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --pink: #ba5f7d;
+  --purple: #85506f;
+  --radius: 16px;
+  --radius-lg: 28px;
+  --font: 'Manrope', 'Segoe UI', sans-serif;
+  --display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --mono: 'IBM Plex Mono', 'Cascadia Code', 'SF Mono', monospace;
+  --transition: 180ms ease;
+}
+
+html { font-size: 15px; background: var(--bg); }
+body {
+  font-family: var(--font);
+  background:
+    radial-gradient(circle at top left, rgba(36,92,115,0.12), transparent 26%),
+    radial-gradient(circle at top right, rgba(186,95,125,0.1), transparent 28%),
+    linear-gradient(180deg, #fbf8f3 0%, #efe5d7 100%);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.18), transparent 40%),
+    radial-gradient(circle at 20% 20%, rgba(255,255,255,0.35), transparent 22%);
+  pointer-events: none;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, textarea { font-family: inherit; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* Layout */
+.app {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 28px 22px 80px;
+  position: relative;
+  animation: app-enter 420ms cubic-bezier(.2,.7,.2,1);
+}
+@keyframes app-enter {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Header */
+.header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 18px;
+  padding: 24px 26px;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  background: var(--surface);
+  box-shadow: 0 28px 70px rgba(31,37,48,0.08);
+  backdrop-filter: blur(24px);
+}
+.header-left { display: grid; gap: 6px; }
+.brand-meta {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.logo {
+  font-family: var(--display);
+  font-size: clamp(2.4rem, 5vw, 4.2rem);
+  font-weight: 600;
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  color: var(--text);
+}
+.logo-dot { color: var(--accent); -webkit-text-fill-color: var(--accent); }
+.brand-subtitle {
+  max-width: 44rem;
+  font-size: 0.96rem;
+  color: var(--text-2);
+}
+.header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.header-stat {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.52);
+}
+.header-stat strong { color: var(--text); font-weight: 800; }
+
+.workspace-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+  gap: 18px;
+  margin: 18px 0 22px;
+}
+.hero-copy,
+.hero-note {
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: rgba(255,255,255,0.42);
+  backdrop-filter: blur(18px);
+}
+.hero-copy {
+  padding: 26px 28px 30px;
+  box-shadow: 0 22px 60px rgba(31,37,48,0.06);
+}
+.hero-kicker,
+.hero-note-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--text-3);
+}
+.hero-kicker::before,
+.hero-note-label::before {
+  content: '';
+  width: 28px;
+  height: 1px;
+  background: var(--accent);
+}
+.hero-copy h1 {
+  margin-top: 18px;
+  font-family: var(--display);
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  max-width: 12ch;
+}
+.hero-copy p {
+  margin-top: 14px;
+  max-width: 42rem;
+  font-size: 1rem;
+  color: var(--text-2);
+}
+.hero-note {
+  padding: 22px 24px;
+  display: grid;
+  align-content: space-between;
+  gap: 16px;
+}
+.hero-note strong {
+  font-family: var(--display);
+  font-size: 1.4rem;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+.hero-note p {
+  font-size: 0.94rem;
+  color: var(--text-2);
+}
+
+/* Grab Button */
+.grab-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 18px; border-radius: 999px;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #fff; background: linear-gradient(135deg, var(--accent), #132f3b);
+  border: 1px solid rgba(255,255,255,0.16);
+  box-shadow: 0 14px 34px rgba(22,63,82,0.18);
+  transition: all var(--transition);
+  cursor: pointer;
+}
+.grab-btn:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 18px 40px rgba(22,63,82,0.24); }
+.grab-btn:active { transform: translateY(0); }
+.grab-btn.grabbing { background: rgba(29,37,48,0.78); color: rgba(255,255,255,0.8); pointer-events: none; }
+.grab-btn.grabbing .grab-icon { animation: spin 1s linear infinite; }
+.grab-btn.grab-done { background: #166534; color: #86efac; }
+.grab-btn.grab-error { background: #7f1d1d; color: #fca5a5; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.grab-icon { display: inline-block; font-size: 15px; line-height: 1; }
+.grab-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  padding: 12px 20px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  background: rgba(29,37,48,0.88); border: 1px solid rgba(255,255,255,0.1);
+  color: #f6f2eb; box-shadow: 0 20px 50px rgba(0,0,0,0.18);
+  z-index: 1000; opacity: 0; transition: opacity 300ms ease;
+  pointer-events: none;
+}
+.grab-toast.visible { opacity: 1; }
+
+/* Nav */
+.nav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px;
+  margin-bottom: 18px;
+  border-radius: 24px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.46);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 40px rgba(31,37,48,0.06);
+  position: sticky;
+  top: 16px;
+  z-index: 40;
+}
+.nav-btn {
+  padding: 10px 16px; border-radius: 999px; font-size: 11px; font-weight: 800;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-3); transition: all var(--transition);
+}
+.nav-btn:hover { color: var(--text); background: rgba(255,255,255,0.78); }
+.nav-btn.active { color: #f7f2eb; background: var(--text); }
+
+/* Search */
+.search-wrap {
+  position: sticky;
+  top: 92px;
+  z-index: 30;
+  margin: 0 0 18px;
+}
+.search-icon {
+  position: absolute; left: 18px; top: 50%; transform: translateY(-50%);
+  color: var(--text-2); pointer-events: none; font-size: 15px;
+}
+.search-input {
+  width: 100%; padding: 18px 54px 18px 48px; background: rgba(255,255,255,0.78);
+  border: 1px solid var(--border-light); border-radius: 24px;
+  color: var(--text); font-size: 15px; outline: none; transition: all var(--transition);
+  box-shadow: 0 18px 40px rgba(31,37,48,0.07);
+}
+.search-input::placeholder { color: var(--text-3); }
+.search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow), 0 24px 48px rgba(31,37,48,0.08); }
+.search-clear {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; border-radius: 999px; display: flex;
+  align-items: center; justify-content: center; font-size: 13px;
+  color: var(--text-3); transition: all var(--transition); background: rgba(35,43,56,0.05);
+}
+.search-clear:hover { background: var(--surface-3); color: var(--text-2); }
+.handle-autocomplete {
+  display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
+  background: rgba(255,255,255,0.9); border: 1px solid var(--border-light); border-radius: 0 0 20px 20px;
+  box-shadow: 0 26px 50px rgba(31,37,48,0.12); max-height: 280px; overflow-y: auto;
+  backdrop-filter: blur(18px);
+}
+.handle-autocomplete.open { display: block; }
+.handle-ac-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  cursor: pointer; transition: background var(--transition);
+}
+.handle-ac-item:hover, .handle-ac-item.ac-active { background: rgba(36,92,115,0.08); }
+.handle-ac-item .ac-handle { font-size: 13px; font-weight: 600; color: var(--text); }
+.handle-ac-item .ac-name { font-size: 12px; color: var(--text-3); }
+.handle-ac-item .ac-count { margin-left: auto; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.search-clear.hidden { display: none; }
+
+/* Filters */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 0 18px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.filter-group { display: flex; align-items: center; gap: 4px; }
+.filter-label { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.16em; margin-right: 6px; font-weight: 800; }
+.filter-pill {
+  padding: 7px 11px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  background: rgba(255,255,255,0.62); color: var(--text-2); border: 1px solid var(--border);
+  transition: all var(--transition); white-space: nowrap;
+}
+.filter-pill:hover { border-color: var(--border-light); color: var(--text); transform: translateY(-1px); }
+.filter-pill.active { background: var(--accent-subtle); border-color: rgba(36,92,115,0.32); color: var(--accent); }
+.filter-pill .count { color: var(--text-3); font-size: 11px; margin-left: 3px; font-variant-numeric: tabular-nums; }
+.col-pill-del { margin-left: 4px; opacity: 0; font-size: 13px; color: var(--red); transition: opacity var(--transition); }
+.filter-pill:hover .col-pill-del { opacity: 0.7; }
+.col-pill-del:hover { opacity: 1 !important; }
+.active-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.active-filter {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 10px 6px 12px; border-radius: 999px; font-size: 12px;
+  background: var(--accent-subtle); color: var(--accent); border: 1px solid rgba(36,92,115,0.2);
+}
+.active-filter button { font-size: 14px; color: var(--accent); padding: 0 2px; opacity: 0.7; }
+.active-filter button:hover { opacity: 1; }
+
+/* Results info */
+.results-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-top: 4px; }
+.results-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 800; }
+.sort-toggle { font-size: 12px; color: var(--text-2); padding: 8px 12px; border-radius: 999px; transition: all var(--transition); background: rgba(255,255,255,0.54); border: 1px solid var(--border); }
+.sort-toggle:hover { background: rgba(255,255,255,0.84); color: var(--text); }
+
+/* Bookmark cards */
+#browse-view,
+#stats-view,
+#queue-view,
+#dupes-view,
+#analytics-view {
+  background: rgba(255,255,255,0.44);
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  padding: 22px;
+  box-shadow: 0 24px 60px rgba(31,37,48,0.06);
+  backdrop-filter: blur(20px);
+}
+.bookmark-list { display: flex; flex-direction: column; gap: 14px; }
+.bookmark-card {
+  display: grid; grid-template-columns: 54px 1fr; gap: 16px;
+  padding: 20px 22px; background: rgba(255,255,255,0.64); border-radius: 24px;
+  cursor: pointer; transition: all var(--transition); border: 1px solid rgba(35,43,56,0.08);
+  position: relative; overflow: hidden;
+  box-shadow: 0 14px 38px rgba(31,37,48,0.05);
+}
+.bookmark-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--accent), rgba(36,92,115,0));
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.bookmark-card:hover { background: rgba(255,255,255,0.86); border-color: var(--border-light); transform: translateY(-2px); box-shadow: 0 24px 48px rgba(31,37,48,0.08); }
+.bookmark-card:hover::before,
+.bookmark-card.kbd-focus::before { opacity: 1; }
+
+.avatar {
+  width: 54px; height: 54px; border-radius: 18px; display: flex;
+  align-items: center; justify-content: center; font-weight: 700;
+  font-size: 18px; color: #fff; flex-shrink: 0;
+  font-family: var(--display);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.26), 0 10px 18px rgba(31,37,48,0.08);
+  position: relative;
+  overflow: hidden;
+}
+.avatar-fallback {
+  position: relative;
+  z-index: 1;
+}
+.avatar-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;
+}
+
+.card-body { min-width: 0; }
+.card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.card-author { font-weight: 800; font-size: 15px; color: var(--text); }
+.card-handle { font-size: 12px; color: var(--text-3); transition: color var(--transition); letter-spacing: 0.08em; text-transform: uppercase; }
+.card-handle:hover { color: var(--accent); }
+.card-date {
+  font-size: 11px; color: var(--text-3); margin-left: auto; white-space: nowrap;
+  letter-spacing: 0.12em; text-transform: uppercase; font-weight: 700;
+  padding: 6px 10px; border-radius: 999px; background: rgba(35,43,56,0.04);
+}
+.card-text {
+  font-size: 15px; color: var(--text); line-height: 1.75;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+  word-break: break-word; margin-bottom: 12px;
+}
+.card-media { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.card-media .media-thumb {
+  width: 78px; height: 78px; border-radius: 14px; overflow: hidden;
+  background: rgba(35,43,56,0.05); cursor: pointer; position: relative; flex-shrink: 0;
+  border: 1px solid var(--border); transition: border-color var(--transition);
+}
+.card-media .media-thumb:hover { border-color: var(--accent); }
+.card-media .media-thumb img, .card-media .media-thumb video {
+  width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none;
+}
+.card-media .media-thumb .thumb-play {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: 24px; height: 24px; border-radius: 50%; background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+}
+.card-media .media-thumb .thumb-play::after {
+  content: ''; width: 0; height: 0;
+  border-style: solid; border-width: 5px 0 5px 8px;
+  border-color: transparent transparent transparent #fff; margin-left: 1px;
+}
+/* Lightbox */
+.lightbox {
+  position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,0.88);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity 200ms ease;
+}
+.lightbox.open { opacity: 1; pointer-events: auto; }
+.lightbox-inner { position: relative; max-width: 90vw; max-height: 90vh; }
+.lightbox-inner img, .lightbox-inner video {
+  max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: 8px;
+  display: block;
+}
+.lightbox-close {
+  position: absolute; top: -36px; right: 0;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(255,255,255,0.12); color: #fff; font-size: 18px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  border: none; transition: background var(--transition);
+}
+.lightbox-close:hover { background: rgba(255,255,255,0.25); }
+.lightbox-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,0.1); color: #fff; font-size: 18px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  border: none; transition: background var(--transition);
+}
+.lightbox-nav:hover { background: rgba(255,255,255,0.25); }
+.lightbox-prev { left: -48px; }
+.lightbox-next { right: -48px; }
+.card-delete {
+  width: 28px; height: 28px; border-radius: 6px; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--text-3); background: transparent; border: 1px solid transparent;
+  transition: all var(--transition); cursor: pointer; font-size: 14px; opacity: 0;
+}
+.bookmark-card:hover .card-delete { opacity: 1; }
+.card-delete:hover { color: var(--red); background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); }
+
+/* Delete confirmation modal */
+.delete-modal-overlay {
+  position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity 200ms ease;
+}
+.delete-modal-overlay.open { opacity: 1; pointer-events: auto; }
+.delete-modal {
+  background: var(--surface); border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg); padding: 24px; width: 400px; max-width: 90vw;
+}
+.delete-modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.delete-modal p { font-size: 13px; color: var(--text-2); margin-bottom: 20px; line-height: 1.5; }
+.delete-modal-actions { display: flex; flex-direction: column; gap: 8px; }
+.delete-modal-btn {
+  padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border); text-align: left; transition: all var(--transition);
+}
+.delete-modal-btn.local-only { background: var(--surface-2); color: var(--text); }
+.delete-modal-btn.local-only:hover { background: var(--surface-3); border-color: var(--border-light); }
+.delete-modal-btn.from-x { background: rgba(239,68,68,0.08); color: var(--red); border-color: rgba(239,68,68,0.2); }
+.delete-modal-btn.from-x:hover { background: rgba(239,68,68,0.15); }
+.delete-modal-btn.cancel { background: transparent; color: var(--text-3); border-color: transparent; text-align: center; }
+.delete-modal-btn.cancel:hover { color: var(--text-2); }
+.delete-modal-btn .btn-desc { display: block; font-size: 11px; font-weight: 400; color: var(--text-3); margin-top: 2px; }
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid rgba(35,43,56,0.08); }
+.card-stat {
+  display: flex; align-items: center; gap: 3px;
+  font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums;
+}
+.card-stat svg { width: 13px; height: 13px; opacity: 0.6; }
+.card-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.badge {
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500;
+  background: var(--surface-3); color: var(--text-3); border: 1px solid var(--border);
+}
+.badge-cat { background: rgba(168,85,247,0.08); color: var(--purple); border-color: rgba(168,85,247,0.2); }
+.badge-dom { background: rgba(34,197,94,0.08); color: var(--green); border-color: rgba(34,197,94,0.2); }
+.badge-col { background: rgba(59,130,246,0.08); color: var(--accent); border-color: rgba(59,130,246,0.2); cursor: pointer; transition: all var(--transition); }
+.badge-col:hover { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); }
+.badge-col .col-rm { opacity: 0; margin-left: 2px; font-size: 12px; transition: opacity var(--transition); }
+.badge-col:hover .col-rm { opacity: 1; }
+.card-tag-btn {
+  width: 24px; height: 24px; border-radius: 6px; display: inline-flex;
+  align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--text-3); background: transparent; border: 1px solid transparent;
+  transition: all var(--transition); cursor: pointer; font-size: 13px; opacity: 0;
+  vertical-align: middle; margin-left: 2px;
+}
+.bookmark-card:hover .card-tag-btn { opacity: 1; }
+.card-tag-btn:hover { color: var(--accent); background: var(--accent-subtle); border-color: rgba(59,130,246,0.2); }
+.card-wiki-btn {
+  height: 24px; padding: 0 9px; border-radius: 999px; display: inline-flex;
+  align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--text-3); background: transparent; border: 1px solid transparent;
+  transition: all var(--transition); cursor: pointer; font-size: 11px; font-weight: 650; opacity: 0;
+  vertical-align: middle; letter-spacing: 0.01em;
+}
+.bookmark-card:hover .card-wiki-btn { opacity: 1; }
+.card-wiki-btn:hover { color: #b45309; background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.25); }
+.card-wiki-btn.is-saving { opacity: 0.7; pointer-events: none; }
+.card-wiki-btn.is-wiki-active { opacity: 1 !important; color: #b45309 !important; background: rgba(245,158,11,0.15) !important; border-color: rgba(245,158,11,0.4) !important; }
+.card-wiki-btn.is-wiki-active::after { content: ' ✓'; font-size: 10px; }
+
+/* Collection picker modal */
+.col-modal-overlay {
+  position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity 200ms ease;
+}
+.col-modal-overlay.open { opacity: 1; pointer-events: auto; }
+.col-modal {
+  background: var(--surface); border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg); padding: 20px; width: 360px; max-width: 90vw;
+}
+.col-modal h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+.col-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; margin-bottom: 12px; }
+.col-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-radius: 6px; cursor: pointer; transition: background var(--transition);
+  font-size: 13px; color: var(--text);
+}
+.col-item:hover { background: var(--surface-2); }
+.col-item.active { background: var(--accent-subtle); color: var(--accent); }
+.col-item .col-check { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--border-light); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; }
+.col-item.active .col-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.col-new-row { display: flex; gap: 6px; }
+.col-new-input {
+  flex: 1; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); font-size: 13px; outline: none;
+}
+.col-new-input:focus { border-color: var(--accent); }
+.col-new-input::placeholder { color: var(--text-3); }
+.col-new-btn {
+  padding: 8px 14px; border-radius: 6px; background: var(--accent); color: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer; border: none;
+  transition: background var(--transition);
+}
+.col-new-btn:hover { background: var(--accent-hover); }
+.filter-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin: 8px 0 4px; font-weight: 600; }
+
+/* Load more */
+.load-more-wrap { text-align: center; padding: 24px 0 18px; }
+.load-more-btn {
+  padding: 12px 28px; border-radius: 999px; font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
+  background: rgba(255,255,255,0.68); color: var(--text-2); border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+.load-more-btn:hover { background: rgba(255,255,255,0.94); color: var(--text); border-color: var(--border-light); transform: translateY(-1px); }
+.load-more-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Spinner */
+.spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-wrap { text-align: center; padding: 56px 0; }
+.loading-wrap p { margin-top: 12px; color: var(--text-3); font-size: 13px; }
+
+/* Empty */
+.empty-state { text-align: center; padding: 72px 20px; }
+.empty-state .icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+.empty-state h3 { font-family: var(--display); font-size: 26px; font-weight: 600; margin-bottom: 6px; color: var(--text); letter-spacing: -0.04em; }
+.empty-state p { color: var(--text-3); font-size: 13px; }
+
+/* Stats view */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card {
+  padding: 24px 20px; background: rgba(255,255,255,0.62); border: 1px solid var(--border);
+  border-radius: 22px; text-align: center;
+}
+.stat-card .num { font-family: var(--display); font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.04em; color: var(--text); }
+.stat-card .label { font-size: 12px; color: var(--text-3); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+.stats-section { margin-bottom: 28px; }
+.stats-section h3 {
+  font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase;
+  letter-spacing: 0.05em; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+
+/* Bar chart */
+.bar-chart { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: 120px 1fr 50px; align-items: center; gap: 10px; }
+.bar-label { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-track { height: 20px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), rgba(59,130,246,0.6)); border-radius: 4px; transition: width 0.5s ease; min-width: 2px; }
+.bar-value { font-size: 12px; color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Donut chart */
+.donut-wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+.donut-svg { width: 160px; height: 160px; flex-shrink: 0; }
+.donut-legend { display: flex; flex-direction: column; gap: 6px; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.legend-count { color: var(--text-3); margin-left: auto; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+
+/* Sparkline */
+.sparkline-svg { width: 100%; height: 100px; }
+
+/* Stats two-col */
+.stats-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 768px) { .stats-columns { grid-template-columns: 1fr; } }
+
+/* Modal / Detail */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 20px; overflow-y: auto; opacity: 0; pointer-events: none;
+  transition: opacity 200ms ease; backdrop-filter: blur(4px);
+}
+.modal-overlay.open { opacity: 1; pointer-events: auto; }
+.modal {
+  width: 100%; max-width: 640px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden;
+  transform: translateY(10px); transition: transform 200ms ease;
+}
+.modal-overlay.open .modal { transform: translateY(0); }
+.modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.modal-close {
+  width: 28px; height: 28px; border-radius: 6px; display: flex;
+  align-items: center; justify-content: center; font-size: 16px; color: var(--text-3);
+  transition: all var(--transition);
+}
+.modal-close:hover { background: var(--surface-3); color: var(--text); }
+.modal-body { padding: 20px; }
+.modal-author { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.modal-author-info { }
+.modal-author-name { font-weight: 600; font-size: 15px; }
+.modal-author-handle { font-size: 13px; color: var(--text-3); }
+.modal-text { font-size: 15px; line-height: 1.7; color: var(--text); margin-bottom: 16px; white-space: pre-wrap; word-break: break-word; }
+.modal-engagement { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.modal-stat { text-align: center; }
+.modal-stat .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.modal-stat .lbl { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.modal-links { margin-bottom: 16px; }
+.modal-links h4 { font-size: 12px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.modal-links a { display: block; font-size: 13px; margin-bottom: 4px; word-break: break-all; }
+.modal-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.modal-actions { padding-top: 12px; border-top: 1px solid var(--border); }
+.modal-actions a {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+.modal-actions a:hover { background: var(--accent-subtle); color: var(--accent); border-color: var(--accent); text-decoration: none; }
+
+/* Notes */
+.note-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.note-section h4 { font-size: 12px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+.note-textarea {
+  width: 100%; min-height: 80px; padding: 10px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font-size: 13px; resize: vertical; outline: none;
+  transition: border-color var(--transition);
+}
+.note-textarea:focus { border-color: var(--accent); }
+.note-save {
+  margin-top: 8px; padding: 7px 18px; border-radius: 6px; font-size: 13px; font-weight: 500;
+  background: var(--accent); color: #fff; transition: all var(--transition);
+}
+.note-save:hover { background: var(--accent-hover); }
+.note-save:disabled { opacity: 0.5; }
+.note-saved { font-size: 12px; color: var(--green); margin-left: 10px; opacity: 0; transition: opacity 200ms; }
+.note-saved.show { opacity: 1; }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .app { padding: 18px 14px 56px; }
+  .header { grid-template-columns: 1fr; padding: 20px 18px; }
+  .workspace-hero { grid-template-columns: 1fr; }
+  .bookmark-card { grid-template-columns: 32px 1fr; gap: 10px; padding: 12px; }
+  .avatar { width: 32px; height: 32px; font-size: 13px; }
+  .card-date { margin-left: 0; }
+  .bar-row { grid-template-columns: 80px 1fr 40px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .nav { top: 10px; }
+  .search-wrap { top: 84px; }
+}
+
+/* Keyboard Power Mode */
+.kbd-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 32px; background: var(--surface); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 16px; font-size: 11px; color: var(--text-3); z-index: 500; opacity: 0; transition: opacity 200ms; }
+.kbd-bar.visible { opacity: 1; }
+.kbd-bar kbd { padding: 1px 5px; border-radius: 3px; background: var(--surface-3); border: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--text-2); }
+.bookmark-card.kbd-focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+body.kbd-active { padding-bottom: 32px; }
+
+/* Reading List / Queue */
+.unread-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--red); color: #fff; font-size: 10px; font-weight: 700; margin-left: 4px; }
+.card-read-btn { width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; opacity: 0; cursor: pointer; border: 1px solid transparent; transition: all var(--transition); color: var(--text-3); }
+.bookmark-card:hover .card-read-btn { opacity: 1; }
+.card-read-btn:hover { color: var(--green); background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.2); }
+.card-read-btn.is-read { opacity: 0.6; color: var(--green); }
+.bookmark-card.is-read { opacity: 0.6; }
+.bookmark-card.is-read:hover { opacity: 1; }
+
+/* Highlights */
+.highlight-bar { display: flex; gap: 4px; margin: 8px 0; }
+.highlight-color { width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: all var(--transition); }
+.highlight-color:hover, .highlight-color.active { border-color: var(--text); transform: scale(1.15); }
+.highlight-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 13px; margin-bottom: 4px; }
+.highlight-item .hl-text { flex: 1; font-style: italic; }
+.highlight-item .hl-del { cursor: pointer; color: var(--text-3); font-size: 12px; }
+.highlight-item .hl-del:hover { color: var(--red); }
+
+/* Saved Searches */
+.saved-searches { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0; }
+.saved-search-pill { display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px; border-radius: 16px; font-size: 12px; background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); color: var(--purple); cursor: pointer; transition: all var(--transition); }
+.saved-search-pill:hover { background: rgba(168,85,247,0.15); }
+.saved-search-pill .ss-count { font-weight: 700; }
+.saved-search-pill .ss-del { margin-left: 4px; opacity: 0; transition: opacity var(--transition); }
+.saved-search-pill:hover .ss-del { opacity: 1; }
+.save-search-btn { font-size: 12px; color: var(--text-3); cursor: pointer; padding: 5px 10px; border: 1px dashed var(--border); border-radius: 16px; transition: all var(--transition); }
+.save-search-btn:hover { color: var(--purple); border-color: var(--purple); }
+
+/* Dead Link badges */
+.dead-link-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; background: rgba(239,68,68,0.08); color: var(--red); border: 1px solid rgba(239,68,68,0.15); }
+
+/* Thread indicator */
+.thread-indicator { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 500; background: rgba(59,130,246,0.08); color: var(--accent); border: 1px solid rgba(59,130,246,0.15); }
+/* Brain Dashboard Styles */
+.brain-dashboard { padding: 20px 0; animation: fade-in 400ms ease; }
+.brain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; }
+.brain-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.03); backdrop-filter: blur(20px);
+  display: flex; flex-direction: column; gap: 20px;
+}
+.card-header { display: flex; align-items: center; gap: 12px; }
+.card-icon { font-size: 20px; }
+.card-header h3 { font-family: var(--display); font-size: 1.4rem; flex: 1; }
+.action-btn {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 8px 14px; border-radius: 99px; background: var(--accent); color: #fff;
+  transition: all var(--transition);
+}
+.action-btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.action-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+/* Memory Tiers */
+.memory-tiers { display: flex; flex-direction: column; gap: 16px; }
+.tier-item { display: flex; flex-direction: column; gap: 6px; }
+.tier-label { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.tier-label strong { color: var(--accent); font-family: var(--mono); }
+.tier-bar { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.tier-progress { height: 100%; background: linear-gradient(90deg, var(--accent), var(--purple)); transition: width 1s ease; }
+
+/* Health Center */
+.health-overview { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 20px 0; }
+.health-score { font-family: var(--display); font-size: 4rem; font-weight: 700; color: var(--accent); line-height: 1; }
+.health-status { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-3); }
+.health-logs {
+  background: rgba(0,0,0,0.03); border-radius: 12px; padding: 16px;
+  height: 200px; overflow-y: auto; font-family: var(--mono); font-size: 11px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.log-entry { padding-bottom: 4px; border-bottom: 1px dashed var(--border); color: var(--text-2); }
+.log-entry.error { color: var(--red); }
+.log-entry.success { color: var(--green); }
+.health-logs .placeholder { color: var(--text-3); font-style: italic; text-align: center; margin: auto; }
+
+/* Knowledge Graph */
+.graph-toolbar { display: flex; gap: 12px; }
+.graph-stat { font-size: 11px; color: var(--text-2); }
+.graph-stat strong { color: var(--text); }
+.graph-container {
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  min-height: 400px; display: flex; align-items: center; justify-content: center;
+  overflow: auto;
+}
+.mermaid { width: 100%; transition: opacity 0.5s ease; }
+
+/* Clusters */
+.cluster-list { display: flex; flex-direction: column; gap: 10px; }
+.cluster-tag {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 13px; transition: all var(--transition);
+}
+.cluster-tag:hover { background: #fff; transform: translateX(4px); border-color: var(--accent); }
+.cluster-weight { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--text-3); }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="brand-meta">Research Desk</div>
+      <div class="logo">Xtreme Bookmarks<span class="logo-dot">.</span></div>
+      <p class="brand-subtitle">The "2nd Brain" for your X bookmarks. Signal extraction, tiered archiving, and knowledge graphing.</p>
+    </div>
+    <div class="header-actions">
+      <button class="grab-btn" id="wiki-btn" title="Build AI knowledge base from curated bookmarks (Wiki-selected)">
+        <span class="grab-icon" id="wiki-icon">⬡</span>
+        <span id="wiki-text">Build Wiki</span>
+      </button>
+      <button class="grab-btn" id="grab-btn" title="Grab new bookmarks from X">
+        <span class="grab-icon" id="grab-icon">↻</span>
+        <span id="grab-text">Grab</span>
+      </button>
+      <div class="header-stat" id="header-stat">Loading...</div>
+    </div>
+  </header>
+
+  <section class="workspace-hero">
+    <div class="hero-copy">
+      <span class="hero-kicker">Local Archive</span>
+      <h1>Search the signal, keep the thread.</h1>
+      <p>Grab new bookmarks, scan what matters, and move between Browse, Queue, Duplicates, and Analytics without leaving your own index.</p>
+    </div>
+    <div class="hero-note">
+      <span class="hero-note-label">What this space is for</span>
+      <strong>Fast recall for launches, research, and emerging ideas.</strong>
+      <p>Collections, saved searches, and quick views turn a pile of bookmarks into something you can actually work from.</p>
+    </div>
+  </section>
+
+  <!-- Nav -->
+  <nav class="nav">
+    <button class="nav-btn active" data-view="browse">Browse</button>
+    <button class="nav-btn" data-view="stats">Stats</button>
+    <button class="nav-btn" data-view="brain">Brain</button>
+    <button class="nav-btn" data-view="queue">Queue <span id="unread-badge" class="unread-badge" style="display:none"></span></button>
+    <button class="nav-btn" data-view="dupes">Duplicates</button>
+    <button class="nav-btn" data-view="analytics">Analytics</button>
+  </nav>
+
+  <!-- Browse View -->
+  <div id="browse-view">
+    <!-- Search -->
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input class="search-input" id="search-input" type="text" placeholder="Search bookmarks or @handle..." autocomplete="off" spellcheck="false">
+      <button class="search-clear hidden" id="search-clear">✕</button>
+      <div class="handle-autocomplete" id="handle-ac"></div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters" id="filters"></div>
+
+    <!-- Saved Searches -->
+    <div class="saved-searches" id="saved-searches" style="display:none"></div>
+
+    <!-- Active filters -->
+    <div class="active-filters" id="active-filters"></div>
+
+    <!-- Results info -->
+    <div class="results-info" id="results-info"></div>
+
+    <!-- Bookmark list -->
+    <div class="bookmark-list" id="bookmark-list"></div>
+
+    <!-- Load more -->
+    <div class="load-more-wrap" id="load-more-wrap" style="display:none">
+      <button class="load-more-btn" id="load-more-btn">Load More</button>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading-wrap" id="loading" style="display:none">
+      <div class="spinner"></div>
+      <p>Loading bookmarks...</p>
+    </div>
+  </div>
+
+  <!-- Stats View -->
+  <div id="stats-view" style="display:none"></div>
+
+  <!-- Queue View -->
+  <div id="queue-view" style="display:none"></div>
+
+  <!-- Duplicates View -->
+  <div id="dupes-view" style="display:none"></div>
+
+  <!-- Analytics View -->
+  <div id="analytics-view" style="display:none"></div>
+
+  <!-- Brain View -->
+  <div id="brain-view" style="display:none" class="brain-dashboard">
+    <div class="brain-grid">
+      <!-- Memory Tiering -->
+      <div class="brain-card memory-card">
+        <div class="card-header">
+          <span class="card-icon">🧠</span>
+          <h3>Memory Engine</h3>
+          <div style="font-size:10px;color:var(--text-3);font-weight:600;margin-left:8px;text-transform:uppercase">Curated Mode</div>
+          <button id="consolidate-btn" class="action-btn">Consolidate</button>
+        </div>
+        <div class="memory-tiers" id="memory-tiers">
+          <div class="tier-item" data-tier="working">
+            <div class="tier-label"><span>Working</span> <strong id="tier-working-count">0</strong></div>
+            <div class="tier-bar"><div class="tier-progress" style="width: 0%"></div></div>
+          </div>
+          <div class="tier-item" data-tier="episodic">
+            <div class="tier-label"><span>Episodic</span> <strong id="tier-episodic-count">0</strong></div>
+            <div class="tier-bar"><div class="tier-progress" style="width: 0%"></div></div>
+          </div>
+          <div class="tier-item" data-tier="semantic">
+            <div class="tier-label"><span>Semantic</span> <strong id="tier-semantic-count">0</strong></div>
+            <div class="tier-bar"><div class="tier-progress" style="width: 0%"></div></div>
+          </div>
+          <div class="tier-item" data-tier="procedural">
+            <div class="tier-label"><span>Procedural</span> <strong id="tier-procedural-count">0</strong></div>
+            <div class="tier-bar"><div class="tier-progress" style="width: 0%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Health Center -->
+      <div class="brain-card health-card">
+        <div class="card-header">
+          <span class="card-icon">🛡️</span>
+          <h3>Health Center</h3>
+          <button id="health-check-btn" class="action-btn">Run Scan</button>
+        </div>
+        <div class="health-overview">
+          <div class="health-score" id="health-score">--</div>
+          <div class="health-status" id="health-status">System Standby</div>
+        </div>
+        <div class="health-logs" id="health-logs">
+          <p class="placeholder">Run a scan to analyze knowledge health...</p>
+        </div>
+      </div>
+
+      <!-- Knowledge Graph -->
+      <div class="brain-card graph-card">
+        <div class="card-header">
+          <span class="card-icon">🕸️</span>
+          <h3>Knowledge Graph</h3>
+          <div class="graph-toolbar">
+            <span class="graph-stat"><strong id="graph-nodes">0</strong> nodes</span>
+            <span class="graph-stat"><strong id="graph-edges">0</strong> edges</span>
+          </div>
+        </div>
+        <div class="graph-container" id="graph-container">
+          <div class="mermaid" id="graph-mermaid">
+            graph LR
+              empty["Initialize Graph View"]
+          </div>
+        </div>
+      </div>
+
+      <!-- Hot Topics / Clusters -->
+      <div class="brain-card clusters-card">
+        <div class="card-header">
+          <span class="card-icon">✨</span>
+          <h3>Contextual Clusters</h3>
+        </div>
+        <div class="cluster-list" id="cluster-list">
+          <p class="placeholder">Awaiting synthesis...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" id="modal"></div>
+  </div>
+</div>
+<div class="grab-toast" id="grab-toast"></div>
+<div class="col-modal-overlay" id="col-modal-overlay">
+  <div class="col-modal">
+    <h3>Save to Collection</h3>
+    <div class="col-list" id="col-list"></div>
+    <div class="col-new-row">
+      <input class="col-new-input" id="col-new-input" type="text" placeholder="New collection name..." maxlength="50">
+      <button class="col-new-btn" id="col-new-btn">Create</button>
+    </div>
+    <div id="col-rules-section" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.05em;font-weight:600">Smart Rules</span>
+        <button id="auto-classify-btn" style="font-size:11px;padding:4px 10px;border-radius:6px;background:var(--accent);color:#fff;cursor:pointer;border:none;font-weight:600">Run Smart Sort</button>
+      </div>
+      <div id="col-rules-list" style="font-size:12px;color:var(--text-3)"></div>
+    </div>
+  </div>
+</div>
+<div class="delete-modal-overlay" id="delete-modal-overlay">
+  <div class="delete-modal">
+    <h3>Delete Bookmark</h3>
+    <p id="delete-modal-text">How would you like to delete this bookmark?</p>
+    <div class="delete-modal-actions">
+      <button class="delete-modal-btn local-only" id="delete-local-btn">
+        Remove from Field Theory only
+        <span class="btn-desc">Keeps the bookmark on x.com, removes it from this app</span>
+      </button>
+      <button class="delete-modal-btn from-x" id="delete-x-btn">
+        Delete from x.com too
+        <span class="btn-desc">Removes the bookmark from both x.com and this app (requires Chrome restart)</span>
+      </button>
+      <button class="delete-modal-btn cancel" id="delete-cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="lightbox" id="lightbox">
+  <div class="lightbox-inner" id="lightbox-inner">
+    <button class="lightbox-close" id="lightbox-close">&times;</button>
+    <button class="lightbox-nav lightbox-prev" id="lightbox-prev">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" id="lightbox-next">&rsaquo;</button>
+    <div id="lightbox-content"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── State ──────────────────────────────────────────────────────────────
+  const S = {
+    view: 'browse',
+    bookmarks: [],
+    total: 0,
+    offset: 0,
+    limit: 30,
+    loading: false,
+    filters: { q: '', author: '', category: '', domain: '', collection: '', after: '', before: '', sort: 'desc', inWiki: false },
+    stats: null,
+    categories: [],
+    domains: [],
+    timeline: [],
+    filterOptions: { categories: [], domains: [], collections: [] },
+    detailBookmark: null,
+    savedSearches: [],
+    deadLinkIds: new Set(),
+  };
+
+  // ── API ────────────────────────────────────────────────────────────────
+  async function api(path, opts) {
+    const res = await fetch(path, opts);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    return res.json();
+  }
+
+  // ── Data loading ───────────────────────────────────────────────────────
+  async function loadBookmarks(reset) {
+    if (S.loading) return;
+    if (reset) { S.offset = 0; S.bookmarks = []; }
+    S.loading = true;
+    renderLoading();
+    try {
+      const p = new URLSearchParams();
+      if (S.filters.q) p.set('q', S.filters.q);
+      if (S.filters.author) p.set('author', S.filters.author);
+      if (S.filters.category) p.set('category', S.filters.category);
+      if (S.filters.domain) p.set('domain', S.filters.domain);
+      if (S.filters.collection) p.set('collection', S.filters.collection);
+      if (S.filters.after) p.set('after', S.filters.after);
+      if (S.filters.before) p.set('before', S.filters.before);
+      if (S.filters.inWiki) p.set('inWiki', 'true');
+      p.set('sort', S.filters.sort);
+      p.set('limit', String(S.limit));
+      p.set('offset', String(S.offset));
+      const data = await api('/api/bookmarks?' + p.toString());
+      if (reset) S.bookmarks = data.bookmarks;
+      else S.bookmarks = S.bookmarks.concat(data.bookmarks);
+      S.total = data.total;
+      S.offset += data.bookmarks.length;
+    } catch (e) { console.error(e); }
+    S.loading = false;
+    renderBrowse();
+  }
+
+  async function loadFilterOptions() {
+    try {
+      const [catData, domData, colData] = await Promise.all([
+        api('/api/categories'), api('/api/domains'), api('/api/collections'),
+      ]);
+      S.filterOptions.categories = catData.categories.filter(c => c.name && c.name !== 'unclassified').slice(0, 12);
+      S.filterOptions.domains = domData.domains.filter(d => d.name).slice(0, 12);
+      S.filterOptions.collections = colData.collections || [];
+      renderFilters();
+    } catch (e) { console.error(e); }
+  }
+
+  async function loadStats() {
+    try {
+      const [stats, catData, domData, tlData] = await Promise.all([
+        api('/api/stats'), api('/api/categories'), api('/api/domains'), api('/api/timeline')
+      ]);
+      S.stats = stats;
+      S.categories = catData.categories;
+      S.domains = domData.domains;
+      S.timeline = tlData.timeline;
+      renderStats();
+    } catch (e) { console.error(e); }
+  }
+  
+  async function loadSavedSearches() {
+    try {
+      const data = await api('/api/saved-searches');
+      S.savedSearches = data.searches || [];
+      renderSavedSearches();
+    } catch (e) { console.error(e); }
+  }
+
+  async function loadDeadLinks() {
+    try {
+      const data = await api('/api/bookmarks/dead-links');
+      S.deadLinkIds = new Set(data.deadLinks.map(b => b.id));
+      renderBookmarkCards();
+    } catch (e) { console.error(e); }
+  }
+
+  async function loadDuplicates() {
+    var el = $('dupes-view');
+    el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div><p>Scanning for duplicates...</p></div>';
+    try {
+      var data = await api('/api/bookmarks/duplicates');
+      var dupes = data.duplicates || [];
+      if (!dupes.length) {
+        el.innerHTML = '<div class="empty-state"><div class="icon">✅</div><h3>No duplicates found</h3><p>Your bookmarks are all unique.</p></div>';
+        return;
+      }
+      var html = '<h2 style="font-size:18px;font-weight:600;margin:20px 0 12px">Duplicate Bookmarks</h2>';
+      html += '<p style="color:var(--text-2);font-size:13px;margin-bottom:16px">' + dupes.length + ' potential duplicate groups</p>';
+      for (var group of dupes) {
+        html += '<div style="padding:12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px">';
+        html += '<p style="font-size:13px;color:var(--text-2)">' + esc(group.text || 'Similar bookmarks') + '</p>';
+        html += '<span style="font-size:11px;color:var(--text-3)">' + (group.count || 2) + ' copies</span></div>';
+      }
+      el.innerHTML = html;
+    } catch (e) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">📋</div><h3>Duplicates</h3><p>Could not load duplicates.</p></div>';
+    }
+  }
+
+  async function loadAnalytics() {
+    var el = $('analytics-view');
+    el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div><p>Loading analytics...</p></div>';
+    try {
+      var data = await api('/api/stats');
+      var html = '<h2 style="font-size:18px;font-weight:600;margin:20px 0 12px">Analytics Overview</h2>';
+      html += '<div class="stats-grid">';
+      html += statCard(data.totalBookmarks, 'Total Bookmarks');
+      html += statCard(data.uniqueAuthors, 'Unique Authors');
+      html += statCard(data.categoriesCount, 'Categories');
+      html += statCard(data.domainsCount, 'Domains');
+      html += '</div>';
+      el.innerHTML = html;
+    } catch (e) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">📊</div><h3>Analytics</h3><p>Could not load analytics data.</p></div>';
+    }
+  }
+
+  async function loadDetail(id) {
+    try {
+      S.detailBookmark = await api('/api/bookmarks/' + id);
+      renderModal();
+      $('modal-overlay').classList.add('open');
+      loadHighlights(id);
+    } catch (e) { console.error(e); }
+  }
+
+  async function saveNote(id, note) {
+    try {
+      await api('/api/bookmarks/' + id + '/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note }),
+      });
+      return true;
+    } catch (e) { console.error(e); return false; }
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+
+  function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function fmtNum(n) {
+    if (n == null) return '—';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  function fmtDate(d) {
+    if (!d) return '';
+    try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return d.slice(0, 10); }
+  }
+
+  function timeAgo(d) {
+    if (!d) return '';
+    const ms = Date.now() - new Date(d).getTime();
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    const days = Math.floor(h / 24);
+    if (days < 30) return days + 'd ago';
+    if (days < 365) return Math.floor(days / 30) + 'mo ago';
+    return Math.floor(days / 365) + 'y ago';
+  }
+
+  const AVATAR_COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#a855f7','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1'];
+  function avatarColor(s) {
+    let h = 0;
+    for (let i = 0; i < (s || '').length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+    return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+  }
+
+  function initials(name, handle) {
+    if (name && name.length > 0) return name.charAt(0).toUpperCase();
+    if (handle && handle.length > 0) return handle.charAt(0).toUpperCase();
+    return '?';
+  }
+
+  function renderAvatar(b, opts) {
+    var style = opts && opts.style ? opts.style : '';
+    if (style && !/;\s*$/.test(style)) style += ';';
+    style += 'background:' + avatarColor(b.authorHandle || b.authorName || b.id) + ';';
+    var fallback = initials(b.authorName, b.authorHandle);
+    var name = b.authorName || b.authorHandle || 'Unknown';
+    var photo = b.authorProfileImageUrl
+      ? '<img class="avatar-photo" src="' + esc(b.authorProfileImageUrl) + '" alt="' + esc(name) + ' profile photo" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">'
+      : '';
+    return '<div class="avatar" style="' + style + '"><span class="avatar-fallback">' + fallback + '</span>' + photo + '</div>';
+  }
+
+  // SVG icons
+  const ICONS = {
+    heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
+    repost: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+    reply: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+    brain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>',
+  };
+
+  // ── Toast (top-level) ───────────────────────────────────────────────────
+  function showToast(msg, duration) {
+    var toast = $('grab-toast');
+    toast.textContent = msg;
+    toast.classList.add('visible');
+    setTimeout(function() { toast.classList.remove('visible'); }, duration || 3000);
+  }
+
+  // ── Render functions ───────────────────────────────────────────────────
+
+  function renderHeaderStat() {
+    $('header-stat').innerHTML = S.total > 0
+      ? '<strong>' + S.total.toLocaleString() + '</strong> bookmarks'
+      : '';
+  }
+
+  function renderLoading() {
+    const el = $('loading');
+    el.style.display = S.loading && S.bookmarks.length === 0 ? 'block' : 'none';
+  }
+
+  function renderFilters() {
+    const f = $('filters');
+    let html = '<div class="filter-group"><span class="filter-label">Quick View</span>';
+    const wikiActive = S.filters.inWiki ? ' active' : '';
+    html += '<button class="filter-pill' + wikiActive + '" data-filter="inWiki" data-value="true" style="border-color:rgba(180,83,9,0.25)">' + ICONS.brain + ' Curated Only</button>';
+    html += '</div>';
+
+    if (S.filterOptions.categories.length) {
+      html += '<div class="filter-group"><span class="filter-label">Category</span>';
+      for (const c of S.filterOptions.categories) {
+        const active = S.filters.category === c.name ? ' active' : '';
+        html += '<button class="filter-pill' + active + '" data-filter="category" data-value="' + esc(c.name) + '">' + esc(c.name) + '<span class="count">' + fmtNum(c.count) + '</span></button>';
+      }
+      html += '</div>';
+    }
+    if (S.filterOptions.domains.length) {
+      html += '<div class="filter-group"><span class="filter-label">Domain</span>';
+      for (const d of S.filterOptions.domains) {
+        const active = S.filters.domain === d.name ? ' active' : '';
+        html += '<button class="filter-pill' + active + '" data-filter="domain" data-value="' + esc(d.name) + '">' + esc(d.name) + '<span class="count">' + fmtNum(d.count) + '</span></button>';
+      }
+      html += '</div>';
+    }
+    if (S.filterOptions.collections.length) {
+      html += '<div class="filter-group"><span class="filter-label">Collections</span>';
+      for (const c of S.filterOptions.collections) {
+        const active = S.filters.collection === c.name ? ' active' : '';
+        html += '<button class="filter-pill' + active + '" data-filter="collection" data-value="' + esc(c.name) + '" style="border-color:rgba(59,130,246,0.25)">' + esc(c.name) + '<span class="count">' + fmtNum(c.count) + '</span><span class="col-pill-del" data-del-col="' + esc(c.name) + '" title="Delete collection">&times;</span></button>';
+      }
+      html += '</div>';
+    }
+    f.innerHTML = html;
+  }
+
+  function renderSavedSearches() {
+    const el = $('saved-searches');
+    if (!el) return;
+    let html = '';
+    for (const ss of S.savedSearches) {
+      html += '<div class="saved-search-pill" data-ss-query="' + esc(ss.query) + '">'
+        + '<span class="ss-query">' + esc(ss.query) + '</span>'
+        + '<span class="ss-del" data-del-ss="' + esc(ss.id) + '">&times;</span>'
+        + '</div>';
+    }
+    html += '<button class="save-search-btn" id="save-search-btn">+ Save current search</button>';
+    el.innerHTML = html;
+  }
+
+  function renderActiveFilters() {
+    const af = $('active-filters');
+    let html = '';
+    const keys = ['author', 'category', 'domain', 'after', 'before', 'inWiki'];
+    for (const k of keys) {
+      if (S.filters[k]) {
+        const displayVal = k === 'inWiki' ? 'Curated Only' : esc(S.filters[k]);
+        html += '<span class="active-filter">' + (k === 'inWiki' ? '' : k + ': ') + displayVal + '<button data-clear="' + k + '">✕</button></span>';
+      }
+    }
+    af.innerHTML = html;
+  }
+
+  function renderResultsInfo() {
+    const ri = $('results-info');
+    if (S.total === 0 && !S.loading) { ri.innerHTML = ''; return; }
+    const sortIcon = S.filters.sort === 'desc' ? '↓' : '↑';
+    ri.innerHTML = '<span class="results-count">' + S.total.toLocaleString() + ' results</span>'
+      + '<button class="sort-toggle" id="sort-btn">' + sortIcon + ' ' + (S.filters.sort === 'desc' ? 'Newest' : 'Oldest') + ' first</button>';
+  }
+
+  function renderMedia(media) {
+    if (!media || !media.length) return '';
+    var count = Math.min(media.length, 4);
+    var encoded = esc(JSON.stringify(media));
+    var h = '<div class="card-media" data-media="' + encoded + '">';
+    for (var i = 0; i < count; i++) {
+      var m = media[i];
+      if (!m || !m.url) continue;
+      var isVideo = m.type === 'video' || m.type === 'animated_gif';
+      h += '<div class="media-thumb" data-idx="' + i + '">';
+      h += '<img src="' + esc(m.url + ':thumb') + '" alt="" loading="lazy">';
+      if (isVideo) h += '<div class="thumb-play"></div>';
+      h += '</div>';
+    }
+    if (media.length > 4) h += '<div class="media-thumb" style="display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-3);">+' + (media.length - 4) + '</div>';
+    h += '</div>';
+    return h;
+  }
+
+  function renderBookmarkCards() {
+    const list = $('bookmark-list');
+    if (!S.bookmarks.length && !S.loading) {
+      list.innerHTML = '<div class="empty-state"><div class="icon">📚</div><h3>No bookmarks found</h3><p>Try a different search or clear your filters</p></div>';
+      $('load-more-wrap').style.display = 'none';
+      return;
+    }
+    let html = '';
+    for (const b of S.bookmarks) {
+      const date = timeAgo(b.postedAt || b.bookmarkedAt);
+      const text = b.text || '';
+      html += '<div class="bookmark-card' + (b.isRead ? ' is-read' : '') + '" data-id="' + esc(b.id) + '">'
+        + renderAvatar(b)
+        + '<div class="card-body">'
+        + '<div class="card-header">'
+        + '<span class="card-author">' + esc(b.authorName || 'Unknown') + '</span>'
+        + '<span class="card-handle" data-author="' + esc(b.authorHandle || '') + '" style="cursor:pointer">@' + esc(b.authorHandle || '?') + '</span>'
+        + '<span class="card-date">' + esc(date) + '</span>'
+        + '</div>'
+        + '<div class="card-text">' + esc(text) + '</div>'
+        + renderMedia(b.media)
+        + '<div class="card-meta">';
+      if (b.likeCount != null) html += '<span class="card-stat">' + ICONS.heart + ' ' + fmtNum(b.likeCount) + '</span>';
+      if (b.repostCount != null) html += '<span class="card-stat">' + ICONS.repost + ' ' + fmtNum(b.repostCount) + '</span>';
+      if (b.viewCount != null) html += '<span class="card-stat">' + ICONS.eye + ' ' + fmtNum(b.viewCount) + '</span>';
+      html += '<span class="card-badges">';
+      if (b.collections && b.collections.length) {
+        for (var ci = 0; ci < b.collections.length; ci++) {
+          html += '<span class="badge badge-col" data-rm-col="' + esc(b.collections[ci]) + '" data-rm-id="' + esc(b.id) + '">' + esc(b.collections[ci]) + ' <span class="col-rm">&times;</span></span>';
+        }
+      }
+      if (b.primaryCategory && b.primaryCategory !== 'unclassified') html += '<span class="badge badge-cat">' + esc(b.primaryCategory) + '</span>';
+      if (b.primaryDomain) html += '<span class="badge badge-dom">' + esc(b.primaryDomain) + '</span>';
+      if (S.deadLinkIds && S.deadLinkIds.has(b.id)) html += '<span class="dead-link-badge">dead link</span>';
+      if (b.text && b.text.charAt(0) === '@') html += '<span class="thread-indicator">↩ reply</span>';
+      html += '</span>'
+        + '<button class="card-wiki-btn' + (b.inWiki ? ' is-wiki-active' : '') + '" data-wiki-id="' + esc(b.id) + '" title="' + (b.inWiki ? 'Remove from Wiki' : 'Add to Wiki curation') + '">' + ICONS.brain + ' Wiki</button>'
+        + '<button class="card-read-btn' + (b.isRead ? ' is-read' : '') + '" data-read-id="' + esc(b.id) + '" title="Toggle read/unread">✓</button>'
+        + '<button class="card-tag-btn" data-tag-id="' + esc(b.id) + '" title="Save to collection">+</button>'
+        + '<button class="card-delete" data-delete-id="' + esc(b.id) + '" title="Delete bookmark">&#x2715;</button>'
+        + '</div></div></div>';
+    }
+    list.innerHTML = html;
+
+    const hasMore = S.offset < S.total;
+    $('load-more-wrap').style.display = hasMore ? 'block' : 'none';
+  }
+
+  function renderBrowse() {
+    renderHeaderStat();
+    renderLoading();
+    renderActiveFilters();
+    renderResultsInfo();
+    renderBookmarkCards();
+  }
+
+  // ── Stats rendering ────────────────────────────────────────────────────
+
+  function renderStats() {
+    if (!S.stats) { $('stats-view').innerHTML = '<div class="loading-wrap"><div class="spinner"></div><p>Loading stats...</p></div>'; return; }
+    const s = S.stats;
+    let html = '';
+
+    // Summary cards
+    html += '<div class="stats-grid">'
+      + statCard(s.totalBookmarks, 'Bookmarks')
+      + statCard(s.uniqueAuthors, 'Authors')
+      + statCard(s.categoriesCount, 'Categories')
+      + statCard(s.domainsCount, 'Domains')
+      + '</div>';
+
+    // Date range
+    if (s.dateRange.earliest) {
+      html += '<p style="font-size:12px;color:var(--text-3);margin-bottom:20px;text-align:center">'
+        + fmtDate(s.dateRange.earliest) + ' — ' + fmtDate(s.dateRange.latest) + '</p>';
+    }
+
+    html += '<div class="stats-columns">';
+
+    // Top authors bar chart
+    if (s.topAuthors.length) {
+      const maxA = s.topAuthors[0].count;
+      html += '<div class="stats-section"><h3>Top Authors</h3><div class="bar-chart">';
+      for (const a of s.topAuthors.slice(0, 12)) {
+        const pct = Math.round((a.count / maxA) * 100);
+        html += '<div class="bar-row">'
+          + '<span class="bar-label">@' + esc(a.handle) + '</span>'
+          + '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>'
+          + '<span class="bar-value">' + a.count + '</span></div>';
+      }
+      html += '</div></div>';
+    }
+
+    // Category donut
+    if (S.categories.length) {
+      const cats = S.categories.filter(c => c.name && c.name !== 'unclassified').slice(0, 10);
+      const total = cats.reduce((a, c) => a + c.count, 0);
+      html += '<div class="stats-section"><h3>Categories</h3><div class="donut-wrap">';
+      html += buildDonut(cats, total);
+      html += '<div class="donut-legend">';
+      const donutColors = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#a855f7','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1'];
+      for (let i = 0; i < cats.length; i++) {
+        html += '<div class="legend-item"><span class="legend-dot" style="background:' + donutColors[i % donutColors.length] + '"></span>'
+          + esc(cats[i].name) + '<span class="legend-count">' + cats[i].count + '</span></div>';
+      }
+      html += '</div></div></div>';
+    }
+
+    html += '</div>'; // close stats-columns
+
+    // Timeline sparkline
+    if (S.timeline.length > 1) {
+      html += '<div class="stats-section"><h3>Bookmarking Timeline</h3>';
+      html += buildSparkline(S.timeline);
+      html += '</div>';
+    }
+
+    // Top domains
+    if (S.stats.topDomains && S.stats.topDomains.length) {
+      const maxD = S.stats.topDomains[0].count;
+      html += '<div class="stats-section"><h3>Top Domains</h3><div class="bar-chart">';
+      for (const d of S.stats.topDomains.slice(0, 10)) {
+        const pct = Math.round((d.count / maxD) * 100);
+        html += '<div class="bar-row">'
+          + '<span class="bar-label">' + esc(d.name) + '</span>'
+          + '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:linear-gradient(90deg,var(--green),rgba(34,197,94,0.5))"></div></div>'
+          + '<span class="bar-value">' + d.count + '</span></div>';
+      }
+      html += '</div></div>';
+    }
+
+    $('stats-view').innerHTML = html;
+  }
+
+  function statCard(num, label) {
+    return '<div class="stat-card"><div class="num">' + (num != null ? Number(num).toLocaleString() : '—') + '</div><div class="label">' + label + '</div></div>';
+  }
+
+  function buildDonut(items, total) {
+    const colors = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#a855f7','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1'];
+    const r = 60, cx = 80, cy = 80;
+    const circ = 2 * Math.PI * r;
+    let offset = 0;
+    let svg = '<svg class="donut-svg" viewBox="0 0 160 160">';
+    for (let i = 0; i < items.length; i++) {
+      const pct = items[i].count / total;
+      const len = pct * circ;
+      svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + colors[i % colors.length] + '" stroke-width="24" '
+        + 'stroke-dasharray="' + len + ' ' + (circ - len) + '" stroke-dashoffset="' + (-offset) + '" '
+        + 'transform="rotate(-90 ' + cx + ' ' + cy + ')" opacity="0.85"/>';
+      offset += len;
+    }
+    svg += '<circle cx="' + cx + '" cy="' + cy + '" r="48" fill="var(--surface)"/>';
+    svg += '<text x="' + cx + '" y="' + cy + '" text-anchor="middle" dominant-baseline="central" fill="var(--text)" font-size="18" font-weight="700">' + total + '</text>';
+    svg += '</svg>';
+    return svg;
+  }
+
+  function buildSparkline(data) {
+    const vals = data.map(d => d.count);
+    const max = Math.max(...vals, 1);
+    const w = 800, h = 100, pad = 2;
+    const step = (w - pad * 2) / Math.max(vals.length - 1, 1);
+    let pts = '';
+    for (let i = 0; i < vals.length; i++) {
+      const x = pad + i * step;
+      const y = h - pad - ((vals[i] / max) * (h - pad * 2));
+      pts += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+    }
+    // area fill
+    const area = pts + 'L' + (pad + (vals.length - 1) * step).toFixed(1) + ',' + (h - pad) + 'L' + pad + ',' + (h - pad) + 'Z';
+    let svg = '<svg class="sparkline-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">';
+    svg += '<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>';
+    svg += '<path d="' + area + '" fill="url(#sg)"/>';
+    svg += '<path d="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2"/>';
+    svg += '</svg>';
+    return svg;
+  }
+
+  // ── Modal rendering ────────────────────────────────────────────────────
+
+  function renderModal() {
+    const b = S.detailBookmark;
+    if (!b) return;
+
+    let html = '<div class="modal-header">'
+      + '<span style="font-weight:600;font-size:14px">Bookmark Detail</span>'
+      + '<button class="modal-close" id="modal-close-btn">✕</button>'
+      + '</div><div class="modal-body">';
+
+    // Author
+    html += '<div class="modal-author">'
+      + renderAvatar(b, { style: 'width:44px;height:44px;font-size:17px' })
+      + '<div class="modal-author-info">'
+      + '<div class="modal-author-name">' + esc(b.authorName || 'Unknown') + '</div>'
+      + '<div class="modal-author-handle">@' + esc(b.authorHandle || '?') + '</div>'
+      + '</div></div>';
+
+    // Text
+    html += '<div class="modal-text">' + esc(b.text || '') + '</div>';
+
+    // Date
+    html += '<p style="font-size:12px;color:var(--text-3);margin-bottom:12px">'
+      + fmtDate(b.postedAt || b.bookmarkedAt) + '</p>';
+
+    // Engagement
+    const stats = [
+      { v: b.likeCount, l: 'Likes' },
+      { v: b.repostCount, l: 'Reposts' },
+      { v: b.replyCount, l: 'Replies' },
+      { v: b.viewCount, l: 'Views' },
+      { v: b.quoteCount, l: 'Quotes' },
+      { v: b.bookmarkCount, l: 'Bookmarks' },
+    ].filter(s => s.v != null);
+    if (stats.length) {
+      html += '<div class="modal-engagement">';
+      for (const st of stats) {
+        html += '<div class="modal-stat"><div class="val">' + fmtNum(st.v) + '</div><div class="lbl">' + st.l + '</div></div>';
+      }
+      html += '</div>';
+    }
+
+    // Tags
+    const tags = [];
+    if (b.primaryCategory && b.primaryCategory !== 'unclassified') tags.push({ t: b.primaryCategory, c: 'badge-cat' });
+    if (b.primaryDomain) tags.push({ t: b.primaryDomain, c: 'badge-dom' });
+    if (b.categories) for (const c of b.categories) { if (c !== b.primaryCategory && c !== 'unclassified') tags.push({ t: c, c: 'badge-cat' }); }
+    if (b.domains) for (const d of b.domains) { if (d !== b.primaryDomain) tags.push({ t: d, c: 'badge-dom' }); }
+    if (tags.length) {
+      html += '<div class="modal-tags">';
+      for (const t of tags) html += '<span class="badge ' + t.c + '">' + esc(t.t) + '</span>';
+      html += '</div>';
+    }
+
+    // Links
+    if (b.links && b.links.length) {
+      html += '<div class="modal-links"><h4>Links</h4>';
+      for (const l of b.links) html += '<a href="' + esc(l) + '" target="_blank" rel="noopener">' + esc(l) + '</a>';
+      html += '</div>';
+    }
+
+    // Highlights
+    html += '<div id="modal-highlights" class="modal-highlights"></div>';
+
+    // Actions
+    var wikiActive = b.inWiki ? ' is-wiki-active' : '';
+    var wikiLabel = b.inWiki ? '✓ In Wiki' : 'Add to Wiki';
+    html += '<div class="modal-actions">'
+      + '<a href="' + esc(b.url || '') + '" target="_blank" rel="noopener">' + ICONS.link + ' View on X</a>'
+      + '<button class="card-wiki-btn' + wikiActive + '" id="modal-wiki-btn" data-wiki-id="' + esc(b.id) + '" style="margin-left:8px;padding:8px 16px;font-size:13px">' + wikiLabel + '</button>'
+      + '<button class="modal-action-btn" id="copy-md-btn" style="margin-left:8px;padding:8px 16px;border-radius:var(--radius);font-size:13px;font-weight:500;background:var(--surface-3);color:var(--text-2);border:1px solid var(--border);cursor:pointer">Copy as Markdown</button>'
+      + '<button class="modal-action-btn" id="share-link-btn" style="margin-left:8px;padding:8px 16px;border-radius:var(--radius);font-size:13px;font-weight:500;background:var(--surface-3);color:var(--text-2);border:1px solid var(--border);cursor:pointer">Copy Link</button>'
+      + '</div>';
+
+    // Notes
+    html += '<div class="note-section"><h4>Notes</h4>'
+      + '<textarea class="note-textarea" id="note-text" placeholder="Add a note about this bookmark...">' + esc(b.note || '') + '</textarea>'
+      + '<div style="display:flex;align-items:center;margin-top:8px">'
+      + '<button class="note-save" id="note-save-btn">Save Note</button>'
+      + '<span class="note-saved" id="note-saved">✓ Saved</span>'
+      + '</div></div>';
+
+    html += '</div>';
+    $('modal').innerHTML = html;
+  }
+
+  // ── Event handling ─────────────────────────────────────────────────────
+
+  let searchTimer = null;
+
+  function initEvents() {
+    // Nav
+    document.querySelector('.nav').addEventListener('click', function(e) {
+      const btn = e.target.closest('.nav-btn');
+      if (!btn) return;
+      const view = btn.dataset.view;
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      S.view = view;
+      $('browse-view').style.display = view === 'browse' ? 'block' : 'none';
+      $('stats-view').style.display = view === 'stats' ? 'block' : 'none';
+      $('queue-view').style.display = view === 'queue' ? 'block' : 'none';
+      $('dupes-view').style.display = view === 'dupes' ? 'block' : 'none';
+      $('analytics-view').style.display = view === 'analytics' ? 'block' : 'none';
+      $('brain-view').style.display = view === 'brain' ? 'block' : 'none';
+      if (view === 'stats' && !S.stats) loadStats();
+      if (view === 'brain') loadBrainData();
+      if (view === 'queue') renderQueueView();
+      if (view === 'dupes') loadDuplicates();
+      if (view === 'analytics') loadAnalytics();
+    });
+
+    // Search
+    var acIdx = -1;
+    var acTimer = null;
+
+    function showAc(authors) {
+      var el = $('handle-ac');
+      if (!authors.length) { el.classList.remove('open'); return; }
+      var html = '';
+      for (var i = 0; i < authors.length; i++) {
+        var a = authors[i];
+        html += '<div class="handle-ac-item" data-handle="' + esc(a.handle) + '">'
+          + '<span class="ac-handle">@' + esc(a.handle) + '</span>'
+          + '<span class="ac-name">' + esc(a.name || '') + '</span>'
+          + '<span class="ac-count">' + a.count + '</span>'
+          + '</div>';
+      }
+      el.innerHTML = html;
+      el.classList.add('open');
+      acIdx = -1;
+    }
+
+    function closeAc() { $('handle-ac').classList.remove('open'); acIdx = -1; }
+
+    function acNav(dir) {
+      var items = $('handle-ac').querySelectorAll('.handle-ac-item');
+      if (!items.length) return;
+      items.forEach(function(it) { it.classList.remove('ac-active'); });
+      acIdx = Math.max(-1, Math.min(acIdx + dir, items.length - 1));
+      if (acIdx >= 0) items[acIdx].classList.add('ac-active');
+    }
+
+    function acSelect(handle) {
+      $('search-input').value = '@' + handle;
+      $('search-clear').classList.remove('hidden');
+      S.filters.q = '';
+      S.filters.author = handle;
+      closeAc();
+      loadBookmarks(true);
+      loadSavedSearches();
+    }
+
+    $('handle-ac').addEventListener('click', function(e) {
+      var item = e.target.closest('.handle-ac-item');
+      if (item) acSelect(item.dataset.handle);
+    });
+
+    $('search-input').addEventListener('input', function(e) {
+      clearTimeout(searchTimer);
+      clearTimeout(acTimer);
+      const v = e.target.value.trim();
+      $('search-clear').classList.toggle('hidden', !v);
+
+      // Autocomplete for @handle
+      var atMatch = v.match(/^@(\w*)$/);
+      if (atMatch) {
+        var prefix = atMatch[1];
+        acTimer = setTimeout(function() {
+          fetch('/api/authors?q=' + encodeURIComponent(prefix))
+            .then(function(r) { return r.json(); })
+            .then(function(d) { showAc(d.authors || []); })
+            .catch(function() {});
+        }, 150);
+        // Don't fire search yet until they pick or finish
+        if (prefix.length < 2) return;
+      } else {
+        closeAc();
+      }
+
+      searchTimer = setTimeout(function() {
+        var handleMatch = v.match(/^@(\w+)$/);
+        if (handleMatch) {
+          S.filters.q = '';
+          S.filters.author = handleMatch[1];
+        } else {
+          S.filters.q = v;
+          S.filters.author = '';
+        }
+        loadBookmarks(true);
+        loadSavedSearches();
+      }, 300);
+    });
+
+    $('search-input').addEventListener('keydown', function(e) {
+      if (!$('handle-ac').classList.contains('open')) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); acNav(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); acNav(-1); }
+      else if (e.key === 'Enter' && acIdx >= 0) {
+        e.preventDefault();
+        var items = $('handle-ac').querySelectorAll('.handle-ac-item');
+        if (items[acIdx]) acSelect(items[acIdx].dataset.handle);
+      }
+      else if (e.key === 'Escape') { closeAc(); }
+    });
+
+    $('search-input').addEventListener('blur', function() {
+      setTimeout(closeAc, 200);
+    });
+
+    $('search-clear').addEventListener('click', function() {
+      $('search-input').value = '';
+      $('search-clear').classList.add('hidden');
+      S.filters.q = '';
+      S.filters.author = '';
+      S.filters.inWiki = false;
+      loadBookmarks(true);
+      renderFilters();
+    });
+
+    // Filter pills
+    $('filters').addEventListener('click', async function(e) {
+      // Delete collection button
+      var delCol = e.target.closest('.col-pill-del');
+      if (delCol) {
+        e.stopPropagation();
+        var name = delCol.dataset.delCol;
+        if (!confirm('Delete the "' + name + '" collection? Bookmarks will not be deleted.')) return;
+        try {
+          await api('/api/collections/' + encodeURIComponent(name), { method: 'DELETE' });
+          if (S.filters.collection === name) S.filters.collection = '';
+          var colData = await api('/api/collections');
+          S.filterOptions.collections = colData.collections || [];
+          renderFilters();
+          loadBookmarks(true);
+        } catch (err) { console.error(err); }
+        return;
+      }
+      const pill = e.target.closest('.filter-pill');
+      if (!pill) return;
+      const key = pill.dataset.filter;
+      const val = pill.dataset.value;
+      if (key === 'inWiki') {
+        S.filters.inWiki = !S.filters.inWiki;
+      } else {
+        S.filters[key] = S.filters[key] === val ? '' : val;
+      }
+      loadBookmarks(true);
+      renderFilters();
+    });
+
+    // Active filter clear
+    $('active-filters').addEventListener('click', function(e) {
+      const btn = e.target.closest('[data-clear]');
+      if (!btn) return;
+      S.filters[btn.dataset.clear] = '';
+      loadBookmarks(true);
+      renderFilters();
+    });
+
+    // Sort toggle
+    $('results-info').addEventListener('click', function(e) {
+      if (e.target.closest('#sort-btn')) {
+        S.filters.sort = S.filters.sort === 'desc' ? 'asc' : 'desc';
+        loadBookmarks(true);
+      }
+    });
+
+    // Bookmark card click — delete, thumbnail lightbox, or detail
+    $('bookmark-list').addEventListener('click', function(e) {
+      // Handle click -> search by author
+      var handle = e.target.closest('.card-handle');
+      if (handle && handle.dataset.author) {
+        e.stopPropagation();
+        var author = handle.dataset.author;
+        $('search-input').value = '@' + author;
+        $('search-clear').classList.remove('hidden');
+        S.filters.q = '';
+        S.filters.author = author;
+        loadBookmarks(true);
+        return;
+      }
+      // Collection badge click -> remove from collection
+      var colBadge = e.target.closest('.badge-col');
+      if (colBadge && colBadge.dataset.rmCol) {
+        e.stopPropagation();
+        var rmId = colBadge.dataset.rmId;
+        var rmCol = colBadge.dataset.rmCol;
+        colBadge.style.opacity = '0.4';
+        fetch('/api/bookmarks/' + encodeURIComponent(rmId) + '/collections/' + encodeURIComponent(rmCol), { method: 'DELETE' })
+          .then(function(r) { return r.json(); })
+          .then(async function() {
+            var bm = S.bookmarks.find(function(b) { return b.id === rmId; });
+            if (bm && bm.collections) bm.collections = bm.collections.filter(function(c) { return c !== rmCol; });
+            var colData = await api('/api/collections');
+            S.filterOptions.collections = colData.collections || [];
+            renderBookmarkCards();
+            renderFilters();
+          })
+          .catch(function() { colBadge.style.opacity = '1'; });
+        return;
+      }
+      // Tag button -> collection picker
+      var tagBtn = e.target.closest('.card-tag-btn');
+      if (tagBtn) {
+        e.stopPropagation();
+        openCollectionPicker(tagBtn.dataset.tagId);
+        return;
+      }
+      // Wiki button -> save this tweet as an individual wiki page
+      var wikiBtn = e.target.closest('.card-wiki-btn');
+      if (wikiBtn) {
+        e.stopPropagation();
+        saveBookmarkToWiki(wikiBtn.dataset.wikiId, wikiBtn);
+        return;
+      }
+      // Delete button
+      var delBtn = e.target.closest('.card-delete');
+      if (delBtn) {
+        e.stopPropagation();
+        openDeleteModal(delBtn.dataset.deleteId);
+        return;
+      }
+      // Thumbnail -> lightbox
+      var thumb = e.target.closest('.media-thumb');
+      if (thumb) {
+        var grid = thumb.closest('.card-media');
+        var mediaData = [];
+        try { mediaData = JSON.parse(grid.dataset.media); } catch(ex) {}
+        var idx = parseInt(thumb.dataset.idx, 10) || 0;
+        openLightbox(mediaData, idx);
+        return;
+      }
+      const card = e.target.closest('.bookmark-card');
+      if (!card) return;
+      loadDetail(card.dataset.id);
+    });
+
+    // Load more
+    $('load-more-btn').addEventListener('click', function() { loadBookmarks(false); });
+
+    // Modal close
+    $('modal-overlay').addEventListener('click', function(e) {
+      if (e.target === $('modal-overlay') || e.target.closest('#modal-close-btn')) {
+        $('modal-overlay').classList.remove('open');
+        S.detailBookmark = null;
+      }
+    });
+
+    // Note save
+    $('modal').addEventListener('click', async function(e) {
+      if (!e.target.closest('#note-save-btn')) return;
+      const btn = $('note-save-btn');
+      const text = $('note-text').value;
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      const ok = await saveNote(S.detailBookmark.id, text);
+      btn.disabled = false;
+      btn.textContent = 'Save Note';
+      if (ok) {
+        S.detailBookmark.note = text;
+        const saved = $('note-saved');
+        saved.classList.add('show');
+        setTimeout(function() { saved.classList.remove('show'); }, 2000);
+      }
+    });
+
+    // Copy/Share in modal
+    $('modal').addEventListener('click', function(e) {
+      if (e.target.id === 'copy-md-btn') {
+        copyMarkdown(S.detailBookmark.id);
+      }
+      if (e.target.id === 'share-link-btn') {
+        navigator.clipboard.writeText(S.detailBookmark.url || '');
+        showToast('Link copied!');
+      }
+    });
+
+    // Read button on cards
+    $('bookmark-list').addEventListener('click', function(e) {
+      var readBtn = e.target.closest('.card-read-btn');
+      if (readBtn) {
+        e.stopPropagation();
+        toggleRead(readBtn.dataset.readId);
+      }
+    });
+
+    $('queue-view').addEventListener('click', function(e) {
+      var wikiBtn = e.target.closest('.card-wiki-btn');
+      if (wikiBtn) {
+        e.stopPropagation();
+        saveBookmarkToWiki(wikiBtn.dataset.wikiId, wikiBtn);
+        return;
+      }
+      var readBtn = e.target.closest('.card-read-btn');
+      if (readBtn) {
+        e.stopPropagation();
+        toggleRead(readBtn.dataset.readId);
+        return;
+      }
+      var card = e.target.closest('.bookmark-card');
+      if (card) loadDetail(card.dataset.id);
+    });
+
+    // Keyboard
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        $('modal-overlay').classList.remove('open');
+        S.detailBookmark = null;
+      }
+      if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        $('search-input').focus();
+      }
+    });
+
+    // Saved searches click handlers
+    $('saved-searches').addEventListener('click', async function(e) {
+      var pill = e.target.closest('.saved-search-pill');
+      var delBtn = e.target.closest('.ss-del');
+      if (delBtn) {
+        e.stopPropagation();
+        try {
+          await api('/api/saved-searches/' + encodeURIComponent(delBtn.dataset.ssDel), { method: 'DELETE' });
+          loadSavedSearches();
+        } catch(err) { showToast('Failed to delete saved search'); }
+        return;
+      }
+      if (pill) {
+        $('search-input').value = pill.dataset.ssQuery;
+        $('search-clear').classList.remove('hidden');
+        S.filters.q = pill.dataset.ssQuery;
+        loadBookmarks(true);
+        return;
+      }
+      if (e.target.id === 'save-search-btn') {
+        try {
+          await api('/api/saved-searches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: S.filters.q }),
+          });
+          loadSavedSearches();
+          showToast('Search saved!');
+        } catch(err) { showToast('Failed to save search'); }
+      }
+    });
+
+    // Highlight interactions
+    $('modal').addEventListener('click', async function(e) {
+      if (e.target.closest('.hl-del')) {
+        var hlId = e.target.closest('.hl-del').dataset.hlDel;
+        try {
+          await api('/api/highlights/' + encodeURIComponent(hlId), { method: 'DELETE' });
+          if (S.detailBookmark) loadHighlights(S.detailBookmark.id);
+        } catch(err) { showToast('Failed to delete highlight'); }
+        return;
+      }
+      if (e.target.id === 'add-highlight-btn') {
+        var sel = window.getSelection().toString().trim();
+        if (!sel) { showToast('Select some text first'); return; }
+        var activeColor = document.querySelector('.highlight-color.active');
+        var color = activeColor ? activeColor.dataset.hlColor : '#ef4444';
+        try {
+          await api('/api/bookmarks/' + S.detailBookmark.id + '/highlights', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: sel, color: color }),
+          });
+          loadHighlights(S.detailBookmark.id);
+          showToast('Highlight added!');
+        } catch(err) { showToast('Failed to add highlight'); }
+        return;
+      }
+      if (e.target.closest('.highlight-color')) {
+        document.querySelectorAll('.highlight-color').forEach(function(c) { c.classList.remove('active'); });
+        e.target.closest('.highlight-color').classList.add('active');
+      }
+      if (e.target.id === 'modal-wiki-btn') {
+        saveBookmarkToWiki(e.target.dataset.wikiId, e.target);
+      }
+    });
+
+    // Keyboard power mode
+    var kbdIdx = -1;
+    function kbdFocus(idx) {
+      var cards = document.querySelectorAll('.bookmark-card');
+      cards.forEach(function(c) { c.classList.remove('kbd-focus'); });
+      if (idx >= 0 && idx < cards.length) {
+        kbdIdx = idx;
+        cards[idx].classList.add('kbd-focus');
+        cards[idx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+    document.addEventListener('keydown', function(e) {
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+      if ($('modal-overlay').classList.contains('open')) return;
+      var cards = document.querySelectorAll('.bookmark-card');
+      if (e.key === 'j') { kbdFocus(Math.min(kbdIdx + 1, cards.length - 1)); }
+      else if (e.key === 'k') { kbdFocus(Math.max(kbdIdx - 1, 0)); }
+      else if (e.key === 'o' && kbdIdx >= 0 && cards[kbdIdx]) { loadDetail(cards[kbdIdx].dataset.id); }
+      else if (e.key === 'c' && kbdIdx >= 0 && cards[kbdIdx]) { openCollectionPicker(cards[kbdIdx].dataset.id); }
+      else if (e.key === 'n' && kbdIdx >= 0 && cards[kbdIdx]) { loadDetail(cards[kbdIdx].dataset.id); }
+      else if (e.key === 'd' && kbdIdx >= 0 && cards[kbdIdx]) { openDeleteModal(cards[kbdIdx].dataset.id); }
+      else if (e.key === 'r' && kbdIdx >= 0 && cards[kbdIdx]) { toggleRead(cards[kbdIdx].dataset.id); }
+      else if (e.key === 's' && kbdIdx >= 0 && cards[kbdIdx]) { copyMarkdown(cards[kbdIdx].dataset.id); }
+      else if (e.key === '?') { $('kbd-bar').classList.toggle('visible'); document.body.classList.toggle('kbd-active'); }
+    });
+
+    // Infinite scroll
+    let scrollTimer = null;
+    window.addEventListener('scroll', function() {
+      if (S.view !== 'browse' || S.loading || S.offset >= S.total) return;
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(function() {
+        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 400) {
+          loadBookmarks(false);
+        }
+      }, 100);
+    });
+  }
+
+  // ── Helper API Functions ──────────────────────────────────────────
+
+  async function copyMarkdown(id) {
+    try {
+      var data = await api('/api/bookmarks/' + id + '/markdown');
+      await navigator.clipboard.writeText(data.markdown);
+      showToast('Copied as Markdown!');
+    } catch(e) { showToast('Copy failed'); }
+  }
+
+  async function saveBookmarkToWiki(id, btn) {
+    if (!id || S.loadingWiki) return;
+    const bm = S.bookmarks.find(b => b.id === id);
+    const nextInWiki = bm ? !bm.inWiki : true;
+    
+    if (btn) { btn.classList.add('is-saving'); btn.disabled = true; }
+    
+    try {
+      const data = await api('/api/bookmarks/' + encodeURIComponent(id) + '/wiki', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inWiki: nextInWiki })
+      });
+      
+      if (bm) bm.inWiki = data.inWiki;
+      if (btn) {
+        btn.classList.remove('is-saving');
+        btn.classList.toggle('is-wiki-active', data.inWiki);
+        btn.disabled = false;
+        btn.title = data.inWiki ? 'Remove from Wiki' : 'Add to Wiki curation';
+        
+        // Update label text based on existing format
+        if (btn.id === 'modal-wiki-btn') {
+          btn.textContent = data.inWiki ? '✓ In Wiki' : 'Add to Wiki';
+        } else {
+          btn.textContent = data.inWiki ? '✓ Wiki' : 'Wiki';
+        }
+      }
+      showToast(data.inWiki ? 'Added to Wiki curation' : 'Removed from Wiki');
+    } catch (e) {
+      console.error(e);
+      showToast('Action failed');
+      if (btn) { btn.classList.remove('is-saving'); btn.disabled = false; }
+    }
+  }
+
+  // ── Reading List / Queue ──────────────────────────────────────────
+  async function loadUnreadCount() {
+    try {
+      var data = await api('/api/unread-count');
+      var badge = $('unread-badge');
+      if (data.count > 0) {
+        badge.textContent = data.count;
+        badge.style.display = 'inline-flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    } catch(e) { /* ignore */ }
+  }
+
+  async function toggleRead(id) {
+    try {
+      var bm = S.bookmarks.find(function(b) { return b.id === id; });
+      var nextRead = !(bm && bm.isRead);
+      var data = await api('/api/bookmarks/' + id + '/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ read: nextRead }),
+      });
+      var bm = S.bookmarks.find(function(b) { return b.id === id; });
+      if (bm) bm.isRead = data.isRead;
+      renderBookmarkCards();
+      loadUnreadCount();
+    } catch(e) { showToast('Failed to toggle read status'); }
+  }
+
+  async function renderQueueView() {
+    var el = $('queue-view');
+    el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div><p>Loading unread bookmarks...</p></div>';
+    try {
+      var data = await api('/api/bookmarks?readStatus=unread&limit=50');
+      var bms = data.bookmarks || [];
+      if (!bms.length) {
+        el.innerHTML = '<div class="empty-state"><div class="icon">✅</div><h3>All caught up!</h3><p>No unread bookmarks in your queue.</p></div>';
+        return;
+      }
+      var html = '<h2 style="font-size:18px;font-weight:600;margin:20px 0 12px">Reading Queue</h2>';
+      html += '<p style="color:var(--text-2);font-size:13px;margin-bottom:16px">' + bms.length + ' unread bookmarks</p>';
+      html += '<div class="bookmark-list">';
+      for (var b of bms) {
+        var date = timeAgo(b.postedAt || b.bookmarkedAt);
+        var wikiActive = b.inWiki ? ' is-wiki-active' : '';
+        var wikiLabel = b.inWiki ? '✓ Wiki' : 'Wiki';
+        html += '<div class="bookmark-card" data-id="' + esc(b.id) + '">'
+          + renderAvatar(b)
+          + '<div class="card-body">'
+          + '<div class="card-header">'
+          + '<span class="card-author">' + esc(b.authorName || 'Unknown') + '</span>'
+          + '<span class="card-handle">@' + esc(b.authorHandle || '?') + '</span>'
+          + '<span class="card-date">' + esc(date) + '</span>'
+          + '</div>'
+          + '<div class="card-text">' + esc(b.text || '') + '</div>'
+          + '<div class="card-meta">'
+          + '<button class="card-wiki-btn' + wikiActive + '" data-wiki-id="' + esc(b.id) + '" title="Add this tweet to wiki">' + wikiLabel + '</button>'
+          + '<button class="card-read-btn" data-read-id="' + esc(b.id) + '" title="Mark as read">✓</button>'
+          + '</div></div></div>';
+      }
+      html += '</div>';
+      el.innerHTML = html;
+    } catch(e) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">⚠</div><h3>Failed to load queue</h3><p>' + esc(e.message) + '</p></div>';
+    }
+  }
+
+  // ── Highlights ────────────────────────────────────────────────────
+  var highlightColors = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7'];
+
+  async function loadHighlights(id) {
+    try {
+      var data = await api('/api/bookmarks/' + id + '/highlights');
+      renderHighlights(data.highlights || []);
+    } catch(e) { renderHighlights([]); }
+  }
+
+  function renderHighlights(highlights) {
+    var el = $('modal-highlights');
+    if (!el) return;
+    var html = '<h4 style="font-size:12px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;margin-top:16px">Highlights</h4>';
+    html += '<div class="highlight-bar">';
+    for (var i = 0; i < highlightColors.length; i++) {
+      html += '<div class="highlight-color" data-hl-color="' + highlightColors[i] + '" style="background:' + highlightColors[i] + '"></div>';
+    }
+    html += '<button style="font-size:11px;color:var(--text-3);margin-left:8px;cursor:pointer;border:1px dashed var(--border);border-radius:12px;padding:2px 8px" id="add-highlight-btn">+ Add from selection</button>';
+    html += '</div>';
+    for (var h of highlights) {
+      html += '<div class="highlight-item" style="background:' + (h.color || highlightColors[0]) + '15">'
+        + '<span class="hl-text">' + esc(h.text) + '</span>'
+        + '<span class="hl-del" data-hl-del="' + esc(h.id) + '">&times;</span>'
+        + '</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  // ── Brain View Logic ─────────────────────────────────────────────
+  async function loadBrainData() {
+    try {
+      const [mem, graph, mermaidData] = await Promise.all([
+        api('/api/brain/memory'),
+        api('/api/brain/graph'),
+        api('/api/brain/graph/mermaid')
+      ]);
+      renderBrainTiers(mem.tiers);
+      renderBrainGraph(graph, mermaidData.mermaid);
+    } catch (e) { console.error('Failed to load brain data:', e); }
+  }
+
+  function renderBrainTiers(tiers) {
+    if (!tiers) return;
+    const keys = ['working', 'episodic', 'semantic', 'procedural'];
+    const max = Math.max(...keys.map(k => tiers[k] || 0), 1);
+    keys.forEach(k => {
+      const count = tiers[k] || 0;
+      const pct = Math.round((count / max) * 100);
+      const countEl = $(`tier-${k}-count`);
+      if (countEl) countEl.textContent = count.toLocaleString();
+      const bar = document.querySelector(`.tier-item[data-tier="${k}"] .tier-progress`);
+      if (bar) bar.style.width = pct + '%';
+    });
+  }
+
+  function renderBrainGraph(stats, mermaidCode) {
+    const nodesEl = $('graph-nodes');
+    const edgesEl = $('graph-edges');
+    if (nodesEl) nodesEl.textContent = stats.totalNodes || 0;
+    if (edgesEl) edgesEl.textContent = stats.totalEdges || 0;
+    
+    const container = $('graph-mermaid');
+    if (container && mermaidCode) {
+      container.innerHTML = mermaidCode;
+      container.removeAttribute('data-processed');
+      mermaid.render('graph-svg', mermaidCode).then(({ svg }) => {
+        container.innerHTML = svg;
+      });
+    }
+  }
+
+  async function runBrainAction(type) {
+    const btn = type === 'consolidate' ? $('consolidate-btn') : $('health-check-btn');
+    const oldText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = type === 'consolidate' ? 'Processing...' : 'Scanning...';
+    
+    const logs = $('health-logs');
+    if (type === 'health') {
+      logs.innerHTML = '<p class="log-entry">Initializing maintenance agents...</p>';
+      $('health-score').textContent = '--';
+      $('health-status').textContent = 'Analyzing...';
+    }
+
+    try {
+      const url = type === 'consolidate' ? '/api/brain/consolidate' : '/api/brain/health';
+      const data = await api(url, { method: 'POST' });
+      
+      if (data.logs) {
+        logs.innerHTML = data.logs.map(l => `<div class="log-entry">${esc(l)}</div>`).join('');
+        logs.scrollTop = logs.scrollHeight;
+      }
+
+      if (type === 'health' && data.report) {
+        const score = data.report.healthScore || 0;
+        $('health-score').textContent = score + '%';
+        $('health-status').textContent = score > 80 ? 'Optimal' : (score > 50 ? 'Stable' : 'Decayed');
+        $('health-score').style.color = score > 80 ? 'var(--green)' : (score > 50 ? 'var(--amber)' : 'var(--red)');
+      }
+
+      if (type === 'consolidate') {
+        renderBrainTiers(data.tiers);
+        showToast('Memory consolidation complete');
+      }
+    } catch (e) {
+      showToast('Action failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
+
+  function initBrainEvents() {
+    const cbtn = $('consolidate-btn');
+    const hbtn = $('health-check-btn');
+    if (cbtn) cbtn.addEventListener('click', () => runBrainAction('consolidate'));
+    if (hbtn) hbtn.addEventListener('click', () => runBrainAction('health'));
+  }
+  // ── Init ───────────────────────────────────────────────────────────────
+  async function init() {
+    initWiki();
+    initEvents();
+    initGrab();
+    S.deadLinkIds = new Set();
+    await Promise.all([loadBookmarks(true), loadFilterOptions(), loadDeadLinks(), loadUnreadCount(), loadSavedSearches()]);
+  }
+
+  // ── Lightbox ──────────────────────────────────────────────────────────
+  var lbMedia = [];
+  var lbIdx = 0;
+
+  function openLightbox(media, idx) {
+    lbMedia = media || [];
+    lbIdx = idx || 0;
+    renderLightboxItem();
+    $('lightbox').classList.add('open');
+  }
+
+  function closeLightbox() {
+    $('lightbox').classList.remove('open');
+    var cont = $('lightbox-content');
+    var vid = cont.querySelector('video');
+    if (vid) vid.pause();
+    cont.innerHTML = '';
+    lbMedia = [];
+  }
+
+  function renderLightboxItem() {
+    var cont = $('lightbox-content');
+    var old = cont.querySelector('video');
+    if (old) old.pause();
+    cont.innerHTML = '';
+    if (!lbMedia.length) return;
+    var m = lbMedia[lbIdx];
+    if (!m) return;
+    var isVideo = m.type === 'video' || m.type === 'animated_gif';
+    if (isVideo && m.videoVariants && m.videoVariants.length) {
+      var best = m.videoVariants.reduce(function(a, b) { return (b.bitrate || 0) > (a.bitrate || 0) ? b : a; });
+      var v = document.createElement('video');
+      v.src = best.url;
+      v.poster = m.url;
+      v.controls = true;
+      v.autoplay = true;
+      if (m.type === 'animated_gif') { v.loop = true; v.muted = true; }
+      cont.appendChild(v);
+    } else {
+      var img = document.createElement('img');
+      img.src = m.url + ':large';
+      img.alt = m.altText || '';
+      cont.appendChild(img);
+    }
+    $('lightbox-prev').style.display = lbMedia.length > 1 ? 'flex' : 'none';
+    $('lightbox-next').style.display = lbMedia.length > 1 ? 'flex' : 'none';
+  }
+
+  $('lightbox').addEventListener('click', function(e) {
+    if (e.target === $('lightbox')) closeLightbox();
+  });
+  $('lightbox-close').addEventListener('click', closeLightbox);
+  $('lightbox-prev').addEventListener('click', function(e) {
+    e.stopPropagation();
+    lbIdx = (lbIdx - 1 + lbMedia.length) % lbMedia.length;
+    renderLightboxItem();
+  });
+  $('lightbox-next').addEventListener('click', function(e) {
+    e.stopPropagation();
+    lbIdx = (lbIdx + 1) % lbMedia.length;
+    renderLightboxItem();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (!$('lightbox').classList.contains('open')) return;
+    if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'ArrowLeft') { lbIdx = (lbIdx - 1 + lbMedia.length) % lbMedia.length; renderLightboxItem(); }
+    if (e.key === 'ArrowRight') { lbIdx = (lbIdx + 1) % lbMedia.length; renderLightboxItem(); }
+  });
+
+  // ── Collection Picker ──────────────────────────────────────────────
+  var colPickerId = null;
+
+  function openCollectionPicker(id) {
+    colPickerId = id;
+    renderCollectionList();
+    renderCollectionRules();
+    $('col-modal-overlay').classList.add('open');
+    $('col-new-input').value = '';
+    $('col-new-input').focus();
+  }
+
+  function closeCollectionPicker() {
+    $('col-modal-overlay').classList.remove('open');
+    colPickerId = null;
+  }
+
+  function renderCollectionList() {
+    var bm = S.bookmarks.find(function(b) { return b.id === colPickerId; });
+    var active = (bm && bm.collections) ? bm.collections : [];
+    var allCols = S.filterOptions.collections || [];
+    var html = '';
+    if (!allCols.length) {
+      html = '<div style="color:var(--text-3);font-size:13px;padding:12px 0;">No collections yet. Create one below.</div>';
+    }
+    for (var i = 0; i < allCols.length; i++) {
+      var c = allCols[i];
+      var isActive = active.indexOf(c.name) !== -1;
+      html += '<div class="col-item' + (isActive ? ' active' : '') + '" data-col="' + esc(c.name) + '">'
+        + '<span class="col-check">' + (isActive ? '&#x2713;' : '') + '</span>'
+        + '<span>' + esc(c.name) + '</span>'
+        + '<span style="margin-left:auto;color:var(--text-3);font-size:11px;">' + c.count + '</span>'
+        + '</div>';
+    }
+    $('col-list').innerHTML = html;
+  }
+
+  $('col-list').addEventListener('click', async function(e) {
+    var item = e.target.closest('.col-item');
+    if (!item || !colPickerId) return;
+    var name = item.dataset.col;
+    var bm = S.bookmarks.find(function(b) { return b.id === colPickerId; });
+    var isActive = bm && bm.collections && bm.collections.indexOf(name) !== -1;
+
+    try {
+      if (isActive) {
+        await api('/api/bookmarks/' + encodeURIComponent(colPickerId) + '/collections/' + encodeURIComponent(name), { method: 'DELETE' });
+        if (bm) bm.collections = bm.collections.filter(function(c) { return c !== name; });
+      } else {
+        await api('/api/bookmarks/' + encodeURIComponent(colPickerId) + '/collections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ collection: name }),
+        });
+        if (bm) { if (!bm.collections) bm.collections = []; bm.collections.push(name); }
+      }
+      // Refresh collection counts
+      var colData = await api('/api/collections');
+      S.filterOptions.collections = colData.collections || [];
+      renderCollectionList();
+      renderBookmarkCards();
+      renderFilters();
+    } catch (err) { console.error(err); }
+  });
+
+  $('col-new-btn').addEventListener('click', async function() {
+    var name = $('col-new-input').value.trim();
+    if (!name || !colPickerId) return;
+    try {
+      await api('/api/bookmarks/' + encodeURIComponent(colPickerId) + '/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection: name }),
+      });
+      var bm = S.bookmarks.find(function(b) { return b.id === colPickerId; });
+      if (bm) { if (!bm.collections) bm.collections = []; bm.collections.push(name); }
+      var colData = await api('/api/collections');
+      S.filterOptions.collections = colData.collections || [];
+      $('col-new-input').value = '';
+      renderCollectionList();
+      renderBookmarkCards();
+      renderFilters();
+    } catch (err) { console.error(err); }
+  });
+
+  $('col-new-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') $('col-new-btn').click();
+  });
+
+  $('col-modal-overlay').addEventListener('click', function(e) {
+    if (e.target === $('col-modal-overlay')) closeCollectionPicker();
+  });
+
+  // ── Smart Auto-Collections ─────────────────────────────────────────
+  function renderCollectionRules() {
+    var allCols = S.filterOptions.collections || [];
+    var html = '';
+    for (var c of allCols) {
+      if (c.keywords) {
+        html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
+          + '<span style="color:var(--accent);font-weight:500">' + esc(c.name) + ':</span>'
+          + '<input type="text" class="col-rule-input" data-rule-col="' + esc(c.name) + '" value="' + esc(c.keywords) + '" style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);font-size:12px;outline:none" placeholder="keyword1, keyword2...">'
+          + '</div>';
+      }
+    }
+    if (!html) html = '<p style="font-size:11px;color:var(--text-3)">No keyword rules set. Add keywords to collections to enable smart sorting.</p>';
+    $('col-rules-list').innerHTML = html;
+  }
+
+  $('auto-classify-btn').addEventListener('click', async function() {
+    var btn = $('auto-classify-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sorting...';
+    try {
+      var data = await api('/api/auto-classify', { method: 'POST' });
+      var matched = data.matched != null ? data.matched : (data.classified || 0);
+      showToast('Smart sort complete! ' + matched + ' bookmarks classified.');
+      var colData = await api('/api/collections');
+      S.filterOptions.collections = colData.collections || [];
+      renderCollectionList();
+      renderFilters();
+      renderBookmarkCards();
+    } catch(e) { showToast('Smart sort failed: ' + (e.message || e)); }
+    btn.disabled = false;
+    btn.textContent = 'Run Smart Sort';
+  });
+
+  // Save rule on blur
+  document.addEventListener('change', async function(e) {
+    if (e.target.classList && e.target.classList.contains('col-rule-input')) {
+      var col = e.target.dataset.ruleCol;
+      var keywords = e.target.value.trim();
+      try {
+        await api('/api/collections/' + encodeURIComponent(col) + '/rules', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keywords: keywords }),
+        });
+        showToast('Rules updated for ' + col);
+      } catch(err) { showToast('Failed to update rules'); }
+    }
+  });
+
+  // ── Delete Modal ────────────────────────────────────────────────────
+  var deleteTargetId = null;
+
+  function openDeleteModal(id) {
+    deleteTargetId = id;
+    var bm = S.bookmarks.find(function(b) { return b.id === id; });
+    var snippet = bm ? ('@' + (bm.authorHandle || '?') + ': ' + (bm.text || '').substring(0, 80)) : id;
+    $('delete-modal-text').textContent = 'Delete "' + snippet + (snippet.length >= 80 ? '...' : '') + '"?';
+    $('delete-modal-overlay').classList.add('open');
+  }
+
+  function closeDeleteModal() {
+    $('delete-modal-overlay').classList.remove('open');
+    deleteTargetId = null;
+  }
+
+  async function executeDelete(fromX) {
+    if (!deleteTargetId) return;
+    var id = deleteTargetId;
+    closeDeleteModal();
+
+    // Optimistically remove from UI
+    S.bookmarks = S.bookmarks.filter(function(b) { return b.id !== id; });
+    S.total = Math.max(0, S.total - 1);
+    renderBrowse();
+
+    try {
+      var res = await fetch('/api/bookmarks/' + encodeURIComponent(id), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromX: fromX }),
+      });
+      var data = await res.json();
+      if (!data.success) throw new Error('Delete failed');
+
+      var msg = 'Bookmark deleted';
+      if (fromX && data.xDeleted) msg += ' from x.com too';
+      else if (fromX && !data.xDeleted) msg = 'Removed locally. x.com delete failed: ' + (data.xError || 'unknown error');
+
+      var toast = $('grab-toast');
+      toast.textContent = msg;
+      toast.classList.add('visible');
+      setTimeout(function() { toast.classList.remove('visible'); }, 3000);
+    } catch (err) {
+      // Re-fetch to restore state
+      var toast = $('grab-toast');
+      toast.textContent = 'Delete failed: ' + (err.message || err);
+      toast.classList.add('visible');
+      setTimeout(function() { toast.classList.remove('visible'); }, 3000);
+      S.offset = 0; S.bookmarks = [];
+      await loadBookmarks(true);
+    }
+  }
+
+  $('delete-local-btn').addEventListener('click', function() { executeDelete(false); });
+  $('delete-x-btn').addEventListener('click', function() { executeDelete(true); });
+  $('delete-cancel-btn').addEventListener('click', closeDeleteModal);
+  $('delete-modal-overlay').addEventListener('click', function(e) {
+    if (e.target === $('delete-modal-overlay')) closeDeleteModal();
+  });
+
+  function initWiki() {
+    const btn = $('wiki-btn');
+    const icon = $('wiki-icon');
+    const txtEl = $('wiki-text');
+    let running = false;
+
+    function resetBtn(delay) {
+      setTimeout(function() {
+        btn.className = 'grab-btn';
+        txtEl.textContent = 'Build Wiki';
+        icon.textContent = '\u2B21';
+        running = false;
+      }, delay);
+    }
+
+    btn.addEventListener('click', async function() {
+      if (running) return;
+      running = true;
+      btn.className = 'grab-btn grabbing';
+      icon.textContent = '⟳';
+      txtEl.textContent = 'Building...';
+      showToast('Building knowledge base — this may take a few minutes...', 30000);
+
+      let hadError = false;
+
+      try {
+        const resp = await fetch('/api/wiki', { method: 'POST' });
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(function() { return ''; });
+          throw new Error(errBody || resp.statusText || 'Wiki request failed');
+        }
+        if (!resp.body) throw new Error('Wiki stream unavailable');
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let currentEvent = '';
+
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buf += decoder.decode(chunk.value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() || '';
+          for (const ln of lines) {
+            if (ln.startsWith('event: ')) { currentEvent = ln.slice(7).trim(); continue; }
+            if (!ln.startsWith('data: ')) continue;
+            try {
+              const d = JSON.parse(ln.slice(6));
+              if (currentEvent === 'error') {
+                hadError = true;
+                showToast('Wiki failed: ' + (d.message || 'Unknown error'), 7000);
+              } else if (currentEvent === 'done') {
+                const n = (d.pagesCreated || 0) + (d.pagesUpdated || 0);
+                const failed = d.pagesFailed || 0;
+                if (failed > 0) {
+                  hadError = true;
+                  showToast('Wiki finished with ' + failed + ' failed pages and ' + n + ' pages written. Check the engine/login and retry.', 10000);
+                } else {
+                  showToast('Knowledge base updated — ' + n + ' pages written to ~/.xtreme-bookmarks/md/');
+                }
+              } else if (d.message) {
+                const short = d.message.replace(/^Initializing.*?\.{3}/, 'Initializing...').slice(0, 40);
+                txtEl.textContent = short || 'Building...';
+              }
+              currentEvent = '';
+            } catch(e) {}
+          }
+        }
+      } catch (err) {
+        hadError = true;
+        showToast('Wiki failed: ' + (err && err.message ? err.message : String(err)), 7000);
+      }
+
+      if (hadError) {
+        btn.className = 'grab-btn grab-error';
+        txtEl.textContent = 'Error';
+        resetBtn(3000);
+        return;
+      }
+
+      btn.className = 'grab-btn grab-done';
+      icon.textContent = '✓';
+      txtEl.textContent = 'Wiki built!';
+      resetBtn(4000);
+    });
+  }
+
+  function initGrab() {
+    const btn = $('grab-btn');
+    const icon = $('grab-icon');
+    const txtEl = $('grab-text');
+    let grabbing = false;
+
+    function resetBtn(delay) {
+      setTimeout(function() {
+        btn.className = 'grab-btn';
+        txtEl.textContent = 'Grab';
+        icon.textContent = '\u21BB';
+        grabbing = false;
+      }, delay || 3000);
+    }
+
+    btn.addEventListener('click', async function() {
+      if (grabbing) return;
+      grabbing = true;
+      btn.className = 'grab-btn grabbing';
+      txtEl.textContent = 'Grabbing...';
+      showToast('Syncing new bookmarks from X...', 15000);
+
+      let added = 0;
+      let hadError = false;
+
+      try {
+        var resp = await fetch('/api/grab', { method: 'POST' });
+        if (!resp.ok) {
+          var errBody = await resp.text().catch(function() { return ''; });
+          throw new Error(errBody || resp.statusText || 'Grab request failed');
+        }
+        if (!resp.body) {
+          throw new Error('Grab stream unavailable');
+        }
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buf = '';
+
+        while (true) {
+          var chunk = await reader.read();
+          if (chunk.done) break;
+          buf += decoder.decode(chunk.value, { stream: true });
+
+          var parts = buf.split('\n');
+          buf = parts.pop();
+
+          for (var i = 0; i < parts.length; i++) {
+            var ln = parts[i];
+            if (!ln.startsWith('data: ')) continue;
+            try {
+              var d = JSON.parse(ln.slice(6));
+              if (d.stage === 'syncing') txtEl.textContent = 'Syncing...';
+              else if (d.stage === 'indexing') txtEl.textContent = 'Indexing...';
+              else if (d.page !== undefined) {
+                txtEl.textContent = 'Page ' + d.page + '...';
+                if (d.newAdded > 0) added = d.newAdded;
+              }
+              else if (d.indexed !== undefined) added = d.added || added;
+              else if (d.message && !d.stage) { hadError = true; showToast('Error: ' + d.message, 5000); }
+            } catch(e) {}
+          }
+        }
+      } catch (err) {
+        hadError = true;
+        var msg = err && err.message ? err.message : String(err);
+        if (/failed to fetch|networkerror|load failed|could not connect|connection refused/i.test(msg)) {
+          msg = 'Could not reach Xtreme Bookmarks. Restart from C:\\Users\\micha\\xtreme-bookmarks.';
+        }
+        showToast('Grab failed: ' + msg, 7000);
+      }
+
+      if (hadError) {
+        btn.className = 'grab-btn grab-error';
+        txtEl.textContent = 'Error';
+        resetBtn(3000);
+        return;
+      }
+
+      btn.className = 'grab-btn grab-done';
+      icon.textContent = '\u2713';
+      txtEl.textContent = added > 0 ? ('+' + added + ' new!') : 'All caught up';
+      showToast(added > 0 ? ('Grabbed ' + added + ' new bookmarks!') : 'No new bookmarks. All caught up!');
+
+      S.offset = 0;
+      S.bookmarks = [];
+      try { await Promise.all([loadBookmarks(true), loadFilterOptions(), loadUnreadCount(), loadDeadLinks()]); } catch(e) {}
+      renderHeaderStat();
+
+      resetBtn(3000);
+    });
+  }
+
+  init();
+})();
+</script>
+<div class="kbd-bar" id="kbd-bar">
+  <span><kbd>j</kbd>/<kbd>k</kbd> navigate</span>
+  <span><kbd>o</kbd> open</span>
+  <span><kbd>c</kbd> collection</span>
+  <span><kbd>n</kbd> note</span>
+  <span><kbd>d</kbd> delete</span>
+  <span><kbd>r</kbd> read/unread</span>
+  <span><kbd>s</kbd> share</span>
+  <span><kbd>/</kbd> search</span>
+  <span><kbd>?</kbd> toggle help</span>
+</div>
+</body>
+</html>

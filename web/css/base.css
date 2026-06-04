@@ -1,0 +1,80 @@
+/* Reset + typography */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The `hidden` attribute must always win over `display:flex` on class selectors. */
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+html { font-size: 15px; color-scheme: light dark; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  background-image: var(--bg-grad);
+  background-attachment: fixed;
+  color: var(--fg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+input, textarea, select { font: inherit; color: inherit; }
+input:focus-visible, textarea:focus-visible, button:focus-visible, [role="tab"]:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--fg-2);
+}
+
+h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 600; letter-spacing: 0; line-height: 1.15; }
+h1 { font-size: 1.8rem; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.1rem; }
+
+.display {
+  font-family: var(--font-display);
+  letter-spacing: 0;
+}
+
+/* Scrollbars */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--fg-3); }
+
+/* Icons (lucide renders SVG into these spans) */
+[data-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+}
+[data-icon] svg {
+  width: 1.1em;
+  height: 1.1em;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  fill: none;
+}
+
+/* Utility */
+.hidden { display: none !important; }
+.placeholder { color: var(--fg-3); font-style: italic; padding: 18px; text-align: center; }
+.mono { font-family: var(--font-mono); font-size: 0.9em; }
+.muted { color: var(--fg-3); }

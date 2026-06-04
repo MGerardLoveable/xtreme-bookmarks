@@ -1,0 +1,109 @@
+/* Design tokens: light + dark, density-aware */
+
+:root {
+  /* Brand */
+  --brand: #2f6f5e;
+  --brand-hover: #24594b;
+  --brand-soft: rgba(47, 111, 94, 0.10);
+  --brand-glow: rgba(47, 111, 94, 0.18);
+
+  /* Accents */
+  --accent-rose: #9b3944;
+  --accent-plum: #6f5964;
+  --accent-amber: #b28b35;
+  --accent-green: #3a8f66;
+  --accent-red: #ba3d3d;
+
+  /* Type */
+  --font-sans: 'Outfit', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Consolas, monospace;
+
+  /* Radii */
+  --r-sm: 5px;
+  --r-md: 8px;
+  --r-lg: 8px;
+  --r-xl: 8px;
+  --r-pill: 8px;
+
+  /* Motion */
+  --t-fast: 120ms ease;
+  --t-med: 200ms ease;
+  --t-slow: 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Layout */
+  --topbar-h: 52px;
+  --statusbar-h: 28px;
+  --rail-w: 260px;
+  --detail-w: 420px;
+}
+
+/* Light */
+html[data-theme="light"] {
+  --bg: #f4f6f2;
+  --bg-grad: repeating-linear-gradient(90deg, rgba(36, 45, 39, 0.018) 0 1px, transparent 1px 34px),
+             linear-gradient(180deg, #fbfcfa 0%, #eef2ed 100%);
+  --surface: rgba(255, 255, 255, 0.78);
+  --surface-2: rgba(255, 255, 255, 0.58);
+  --surface-3: rgba(35, 43, 56, 0.05);
+  --surface-hover: rgba(255, 255, 255, 0.88);
+  --surface-active: rgba(47, 111, 94, 0.09);
+  --border: rgba(35, 43, 56, 0.14);
+  --border-strong: rgba(35, 43, 56, 0.24);
+  --fg: #1d241f;
+  --fg-2: #4d5b53;
+  --fg-3: #7f8a83;
+  --fg-inverse: #fbfcfa;
+  --shadow-sm: 0 1px 2px rgba(29, 36, 31, 0.06), 0 1px 3px rgba(29, 36, 31, 0.05);
+  --shadow-md: 0 6px 16px rgba(29, 36, 31, 0.08), 0 2px 4px rgba(29, 36, 31, 0.04);
+  --shadow-lg: 0 24px 60px rgba(29, 36, 31, 0.12);
+  --scrim: rgba(20, 25, 34, 0.32);
+}
+
+/* Dark */
+html[data-theme="dark"] {
+  --bg: #171a16;
+  --bg-grad: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 36px),
+             linear-gradient(180deg, #191d18 0%, #121510 100%);
+  --surface: rgba(29, 34, 28, 0.78);
+  --surface-2: rgba(29, 34, 28, 0.55);
+  --surface-3: rgba(255, 255, 255, 0.04);
+  --surface-hover: rgba(42, 50, 60, 0.88);
+  --surface-active: rgba(65, 150, 180, 0.16);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --fg: #eaeef5;
+  --fg-2: #b4bdcb;
+  --fg-3: #7e8897;
+  --fg-inverse: #12161c;
+  --brand: #83b89d;
+  --brand-hover: #a0cfb8;
+  --brand-soft: rgba(131, 184, 157, 0.14);
+  --brand-glow: rgba(131, 184, 157, 0.24);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.55);
+}
+
+/* Density */
+html[data-density="compact"] {
+  --row-pad-y: 8px;
+  --row-pad-x: 12px;
+  --row-font: 13px;
+  --card-pad: 14px;
+}
+html[data-density="comfortable"] {
+  --row-pad-y: 14px;
+  --row-pad-x: 16px;
+  --row-font: 14px;
+  --card-pad: 20px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

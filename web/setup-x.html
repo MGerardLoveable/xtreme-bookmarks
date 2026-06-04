@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xtreme Bookmarks · X API Setup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f4;
+      --surface: #ffffff;
+      --text: #1f2722;
+      --muted: #66706a;
+      --brand: #3f735f;
+      --border: #dce2dc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+    }
+    main {
+      width: min(720px, calc(100vw - 32px));
+      padding: 28px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: 0 18px 50px rgba(31, 39, 34, 0.08);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    p { margin: 0 0 20px; color: var(--muted); line-height: 1.45; }
+    form { display: grid; gap: 16px; }
+    section {
+      margin-top: 22px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    label { display: grid; gap: 7px; font-weight: 700; }
+    input {
+      width: 100%;
+      padding: 12px 13px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font: 15px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+    button {
+      min-height: 40px;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.primary { border-color: var(--brand); background: var(--brand); color: #fff; }
+    #status { margin-top: 16px; min-height: 22px; font-weight: 700; color: var(--brand); }
+    .webhook-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .readout {
+      padding: 12px 13px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #f9faf8;
+      font: 14px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .hint { margin-bottom: 0; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>X API setup</h1>
+    <p>Paste the values from X here. They are saved locally to <strong>.env.local</strong> and are not displayed back after saving.</p>
+    <form id="form">
+      <label>
+        Consumer Key
+        <input id="apiKey" autocomplete="off" spellcheck="false" placeholder="Paste Consumer Key">
+      </label>
+      <label>
+        Secret Key
+        <input id="apiSecret" autocomplete="off" spellcheck="false" placeholder="Paste Secret Key">
+      </label>
+      <label>
+        Bearer Token
+        <input id="bearerToken" autocomplete="off" spellcheck="false" placeholder="Paste Bearer Token">
+      </label>
+      <div class="actions">
+        <button class="primary" type="submit">Save to Xtreme Bookmarks</button>
+        <button type="button" id="test">Test post retrieval</button>
+        <button type="button" id="clear">Clear boxes</button>
+      </div>
+      <div id="status" role="status"></div>
+    </form>
+    <section aria-labelledby="webhook-title">
+      <h2 id="webhook-title">Notifications receiver</h2>
+      <p class="hint">Xtreme can receive X webhook checks and events now. X still needs a public HTTPS tunnel or domain that forwards to this local app.</p>
+      <div class="webhook-grid">
+        <div>
+          <strong>Local app endpoint</strong>
+          <div class="readout" id="webhookLocal">http://localhost:3847/api/x/webhook</div>
+        </div>
+        <div>
+          <strong>Recommended events</strong>
+          <div class="readout">follow.follow, mentions via keyword/user filters</div>
+        </div>
+        <div>
+          <strong>Status</strong>
+          <div class="readout" id="webhookStatus">Checking...</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="checkWebhook">Check receiver</button>
+        <button type="button" id="viewEvents">View latest event log</button>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('form');
+    const status = document.getElementById('status');
+    const webhookStatus = document.getElementById('webhookStatus');
+    document.getElementById('clear').addEventListener('click', () => {
+      form.reset();
+      status.textContent = '';
+    });
+    document.getElementById('test').addEventListener('click', async () => {
+      status.textContent = 'Testing X API...';
+      const res = await fetch('/api/settings/x-credentials/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tweetId: '20' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      status.textContent = data.ok
+        ? 'X API works. Post retrieval is ready.'
+        : `X API test failed: ${data.status || ''} ${data.message || 'check the token'}`.trim();
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      status.textContent = 'Saving...';
+      const payload = {
+        apiKey: document.getElementById('apiKey').value.trim(),
+        apiSecret: document.getElementById('apiSecret').value.trim(),
+        bearerToken: document.getElementById('bearerToken').value.trim(),
+      };
+      const res = await fetch('/api/settings/x-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        status.textContent = 'Could not save. Check the app server and try again.';
+        return;
+      }
+      form.reset();
+      status.textContent = 'Saved. You can close this tab.';
+      checkWebhook();
+    });
+    async function checkWebhook() {
+      webhookStatus.textContent = 'Checking...';
+      const res = await fetch('/api/x/webhook');
+      const data = await res.json().catch(() => ({}));
+      webhookStatus.textContent = data.ready
+        ? 'Ready. Add a public HTTPS tunnel URL ending in /api/x/webhook.'
+        : 'Not ready yet. Save the Secret Key first.';
+    }
+    document.getElementById('checkWebhook').addEventListener('click', checkWebhook);
+    document.getElementById('viewEvents').addEventListener('click', async () => {
+      webhookStatus.textContent = 'Loading latest event...';
+      const res = await fetch('/api/x/webhook/events?limit=1');
+      const data = await res.json().catch(() => ({}));
+      const latest = data.events?.[0];
+      webhookStatus.textContent = latest
+        ? `Latest: ${latest.eventType} at ${latest.receivedAt}`
+        : 'No webhook events have arrived yet.';
+    });
+    checkWebhook();
+  </script>
+</body>
+</html>
