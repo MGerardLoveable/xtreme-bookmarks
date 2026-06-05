@@ -8,6 +8,7 @@ param(
   [string]$RepositoryUrl = "https://github.com/MGerardLoveable/xtreme-bookmarks.git",
   [string]$WebUser = "xtreme",
   [string]$WebPassword = "",
+  [switch]$NoWebPassword,
   [switch]$SkipDataUpload
 )
 
@@ -64,7 +65,9 @@ try {
   throw "AWS is not logged in. Run: aws login"
 }
 
-if (-not $WebPassword) {
+if ($NoWebPassword) {
+  $WebPassword = ""
+} elseif (-not $WebPassword) {
   $WebPassword = New-Password
 }
 

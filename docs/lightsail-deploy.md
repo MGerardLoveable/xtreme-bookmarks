@@ -2,7 +2,7 @@
 
 This deploys Xtreme Bookmarks to a Lightsail Ubuntu instance so the web app is reachable from any device.
 
-The server is protected with Basic Auth when `XTREME_BOOKMARKS_WEB_PASSWORD` is set. Local use remains unchanged if that variable is absent.
+The server is protected with Basic Auth when `XTREME_BOOKMARKS_WEB_PASSWORD` is set. Local use remains unchanged if that variable is absent. To make the Lightsail app public with no login prompt, deploy with `-NoWebPassword`.
 
 ## Prerequisites
 
@@ -22,6 +22,12 @@ From the project root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-lightsail.ps1
+```
+
+Deploy without a login prompt:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-lightsail.ps1 -NoWebPassword
 ```
 
 The script will:
