@@ -19,6 +19,7 @@ $DeployDir = Join-Path $ProjectDir ".deploy"
 $KeyName = "$InstanceName-key"
 $KeyPath = Join-Path $DeployDir "$KeyName.pem"
 $DataDir = Join-Path $env:USERPROFILE ".xtreme-bookmarks"
+$LocalEnvPath = Join-Path $ProjectDir ".env.local"
 
 function Require-Command($Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -51,6 +52,38 @@ function AwsJson {
   if ($LASTEXITCODE -ne 0) { throw "aws $($flat -join ' ') failed." }
   if ([string]::IsNullOrWhiteSpace($json)) { return $null }
   return $json | ConvertFrom-Json
+}
+
+function Get-LocalXEnvLines($CallbackUrl) {
+  $keys = @(
+    "X_API_KEY",
+    "X_API_SECRET",
+    "X_CLIENT_ID",
+    "X_CLIENT_SECRET",
+    "X_BEARER_TOKEN",
+    "X_ACCESS_TOKEN",
+    "X_ACCESS_TOKEN_SECRET"
+  )
+  $values = @{}
+  if (Test-Path $LocalEnvPath) {
+    Get-Content $LocalEnvPath | ForEach-Object {
+      if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+      $parts = $_ -split '=', 2
+      $key = $parts[0].Trim()
+      if ($keys -contains $key -and $parts[1]) {
+        $values[$key] = $parts[1]
+      }
+    }
+  }
+
+  $lines = @()
+  foreach ($key in $keys) {
+    if ($values.ContainsKey($key)) {
+      $lines += "$key=$($values[$key])"
+    }
+  }
+  $lines += "X_CALLBACK_URL=$CallbackUrl"
+  return $lines
 }
 
 Require-Command aws
@@ -108,6 +141,16 @@ apt-get install -y ca-certificates curl git nginx
 
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
+
+if [ ! -f /swapfile ]; then
+  fallocate -l 1G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+else
+  swapon /swapfile || true
+fi
 
 mkdir -p /opt/xtreme-bookmarks /opt/xtreme-bookmarks-data
 chown -R ubuntu:ubuntu /opt/xtreme-bookmarks /opt/xtreme-bookmarks-data
@@ -237,6 +280,34 @@ for ($i = 0; $i -lt 60; $i++) {
 Write-Host "Provisioning Lightsail instance..."
 scp -o StrictHostKeyChecking=accept-new -i $KeyPath $userDataPath "ubuntu@${PublicIp}:/tmp/xtreme-bookmarks-provision.sh"
 ssh -i $KeyPath "ubuntu@$PublicIp" "sudo bash /tmp/xtreme-bookmarks-provision.sh"
+
+$xEnvLines = Get-LocalXEnvLines "http://$PublicIp/auth/callback"
+if ($xEnvLines.Count -gt 1) {
+  $xEnvPath = Join-Path $DeployDir "lightsail-x.env"
+  $xEnvLines | Set-Content -Path $xEnvPath -Encoding ASCII
+  Write-Host "Uploading X API environment for cloud OAuth..."
+  scp -i $KeyPath $xEnvPath "ubuntu@${PublicIp}:/tmp/xtreme-bookmarks-x.env"
+  ssh -i $KeyPath "ubuntu@$PublicIp" "sudo python3 - <<'PY'
+from pathlib import Path
+base = Path('/etc/xtreme-bookmarks.env')
+extra = Path('/tmp/xtreme-bookmarks-x.env')
+values = {}
+order = []
+for path in (base, extra):
+    if not path.exists():
+        continue
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        values[key] = value
+        if key not in order:
+            order.append(key)
+base.write_text('\n'.join(f'{key}={values[key]}' for key in order) + '\n')
+PY
+sudo chmod 600 /etc/xtreme-bookmarks.env
+rm -f /tmp/xtreme-bookmarks-x.env"
+}
 
 if (-not $SkipDataUpload) {
   if (-not (Test-Path $DataDir)) {
