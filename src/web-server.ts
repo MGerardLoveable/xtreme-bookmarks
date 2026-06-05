@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exec, spawn } from 'node:child_process';
+import { exec } from 'node:child_process';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import type { Database } from 'sql.js';
@@ -22,6 +22,7 @@ import { askMd } from './md-ask.js';
 import { detectAvailableEngines, getGrokOauthStatus } from './engine.js';
 import { loadPreferences } from './preferences.js';
 import { loadEnv } from './config.js';
+import { buildTwitterOAuthUrl, exchangeCodeForToken, saveTwitterOAuthToken } from './xauth.js';
 import {
   addXWatchAccount,
   backfillAllXWatchAccounts,
@@ -81,13 +82,11 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const OAUTH_AUTH_URL_RE = /https:\/\/twitter\.com\/i\/oauth2\/authorize\?[^\s\r\n]+/;
-
 let activeAuthFlow: {
-  child: ReturnType<typeof spawn>;
   startedAt: number;
-  url?: string;
-  pending?: Promise<string>;
+  state: string;
+  verifier: string;
+  url: string;
 } | null = null;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -115,6 +114,15 @@ function getMimeType(ext: string): string {
     '.ico': 'image/x-icon',
   };
   return types[ext] || 'application/octet-stream';
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function sendJson(res: http.ServerResponse, data: unknown, status = 200): void {
@@ -352,59 +360,50 @@ function installedBrowserIds(): string[] {
   });
 }
 
-function startAuthFlow(): Promise<string> {
-  if (activeAuthFlow?.url && !activeAuthFlow.child.killed) {
-    return Promise.resolve(activeAuthFlow.url);
-  }
-  if (activeAuthFlow?.pending && !activeAuthFlow.child.killed) {
-    return activeAuthFlow.pending;
+function startAuthFlow(): string {
+  if (activeAuthFlow && Date.now() - activeAuthFlow.startedAt < 10 * 60 * 1000) {
+    return activeAuthFlow.url;
   }
 
-  const child = spawn(process.execPath, ['bin/ft.mjs', 'auth'], {
-    cwd: process.cwd(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
+  const flow = buildTwitterOAuthUrl();
+  activeAuthFlow = {
+    startedAt: Date.now(),
+    state: flow.state,
+    verifier: flow.verifier,
+    url: flow.url,
+  };
+  return flow.url;
+}
 
-  const pending = new Promise<string>((resolve, reject) => {
-    let settled = false;
-    let output = '';
-    let stderr = '';
+async function handleOAuthCallback(reqUrl: URL, res: http.ServerResponse): Promise<void> {
+  const code = reqUrl.searchParams.get('code');
+  const state = reqUrl.searchParams.get('state');
+  const error = reqUrl.searchParams.get('error');
 
-    const finish = (err?: Error, url?: string) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (err) reject(err);
-      else resolve(url!);
-    };
+  if (error) {
+    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(`<h1>X authorization failed</h1><p>${escapeHtml(error)}</p>`);
+    return;
+  }
 
-    const inspect = (chunk: Buffer) => {
-      output += chunk.toString();
-      const match = output.match(OAUTH_AUTH_URL_RE);
-      if (match) {
-        if (activeAuthFlow) activeAuthFlow.url = match[0];
-        finish(undefined, match[0]);
-      }
-    };
+  if (!activeAuthFlow || !code || state !== activeAuthFlow.state) {
+    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end('<h1>X authorization failed</h1><p>The callback did not match the active authorization request. Go back to Xtreme Bookmarks and try Grab again.</p>');
+    return;
+  }
 
-    const timeout = setTimeout(() => {
-      finish(new Error('OAuth authorization flow did not provide a URL in time.'));
-    }, 10000);
-
-    child.stdout.on('data', inspect);
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on('error', (err) => finish(err));
-    child.on('exit', (code) => {
-      if (activeAuthFlow?.child === child) activeAuthFlow = null;
-      if (!settled) {
-        finish(new Error(stderr.trim() || `OAuth authorization process exited with code ${code ?? 'unknown'}.`));
-      }
-    });
-  });
-
-  activeAuthFlow = { child, startedAt: Date.now(), pending };
-  return pending;
+  const verifier = activeAuthFlow.verifier;
+  activeAuthFlow = null;
+  try {
+    const token = await exchangeCodeForToken(code, verifier);
+    await saveTwitterOAuthToken(token);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end('<h1>Xtreme Bookmarks is authorized</h1><p>You can close this tab and press Grab new bookmarks again.</p>');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(`<h1>X authorization failed</h1><p>${escapeHtml(message)}</p>`);
+  }
 }
 
 async function rebuildIndexAndReload(dbPath: string, state?: { db: Database }): Promise<void> {
@@ -1293,9 +1292,10 @@ async function handleApi(
           } catch (apiErr) {
             const browserMessage = lastBrowserError instanceof Error ? lastBrowserError.message : String(lastBrowserError ?? 'No installed browser session could be used.');
             const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
-            const authUrl = /Missing user-context OAuth token/i.test(apiMessage)
-              ? await startAuthFlow().catch(() => undefined)
-              : undefined;
+            let authUrl: string | undefined;
+            if (/Missing user-context OAuth token/i.test(apiMessage)) {
+              try { authUrl = startAuthFlow(); } catch {}
+            }
 
             if (authUrl) {
               send('auth_required', {
@@ -2028,6 +2028,16 @@ export async function startWebServer(port: number = 3848): Promise<void> {
 
     if (req.method === 'GET' && (pathname === '/healthz' || pathname === '/api/healthz')) {
       sendJson(res, { ok: true, app: 'xtreme-bookmarks' });
+      return;
+    }
+
+    if (req.method === 'GET' && (pathname === '/auth/callback' || pathname === '/callback')) {
+      try {
+        await handleOAuthCallback(url, res);
+      } catch (err) {
+        console.error('OAuth callback error:', err);
+        sendError(res, 'OAuth callback failed', 500);
+      }
       return;
     }
 

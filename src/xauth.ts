@@ -38,7 +38,7 @@ export function buildTwitterOAuthUrl(): { url: string; state: string; verifier: 
   return { url: url.toString(), state, verifier };
 }
 
-async function exchangeCodeForToken(code: string, verifier: string): Promise<XOAuthTokenSet> {
+export async function exchangeCodeForToken(code: string, verifier: string): Promise<XOAuthTokenSet> {
   const cfg = loadXApiConfig();
   if (!cfg.callbackUrl) {
     throw new Error('Missing X_CALLBACK_URL in .env.local');
