@@ -13,6 +13,7 @@ import {
   mergeXStreamRemovedItemsFromDisk,
   normalizeXHandle,
   removeXStreamItem,
+  removeXStreamItemAndSave,
   removeXStreamItems,
   saveXStreamTweet,
   startXWatchPollQueue,
@@ -134,6 +135,32 @@ test('saveXStreamTweet stores posts and deduplicates by tweet ID', async () => {
   assert.equal(items[0].tweetId, '900');
   assert.equal(items[0].itemType, 'post');
   assert.equal(items[0].sourceAccount, 'account1');
+});
+
+test('saveXStreamTweet ignores nested tweets from unwatched authors', async () => {
+  const db = await createDb();
+  initXStreamSchema(db);
+  db.run(
+    `INSERT INTO x_watch_accounts (handle, user_id, username, name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    ['account1', '111', 'account1', 'Account One', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z'],
+  );
+
+  const payload = {
+    data: {
+      id: '907',
+      text: 'Nested original from someone else',
+      author_id: '999',
+      created_at: '2026-05-01T01:30:00Z',
+      conversation_id: '907',
+    },
+    includes: {
+      users: [{ id: '999', username: 'not_watched', name: 'Not Watched' }],
+    },
+  };
+
+  assert.equal(saveXStreamTweet(db, payload.data, payload.includes, payload), false);
+  assert.equal(listXStreamItems(db).length, 0);
 });
 
 test('saveXStreamTweet marks replies', async () => {
@@ -270,6 +297,59 @@ test('removed X Feed items survive stale poller database saves', async () => {
 
   db.close();
   stalePollerDb.close();
+  liveDb.close();
+  reopened.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('removeXStreamItemAndSave preserves existing removals from disk', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xfeed-remove-merge-'));
+  const dbPath = path.join(dir, 'xfeed.sqlite');
+  const db = await createDb();
+  initXStreamSchema(db);
+  db.run(
+    `INSERT INTO x_watch_accounts (handle, user_id, username, name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    ['account1', '111', 'account1', 'Account One', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z'],
+  );
+  const first = {
+    data: {
+      id: '908',
+      text: 'First removed item',
+      author_id: '111',
+      created_at: '2026-05-01T06:00:00Z',
+      conversation_id: '908',
+    },
+    includes: {
+      users: [{ id: '111', username: 'account1', name: 'Account One' }],
+    },
+  };
+  const second = {
+    data: {
+      id: '909',
+      text: 'Second removed item',
+      author_id: '111',
+      created_at: '2026-05-01T06:01:00Z',
+      conversation_id: '909',
+    },
+    includes: first.includes,
+  };
+  assert.equal(saveXStreamTweet(db, first.data, first.includes, first), true);
+  assert.equal(saveXStreamTweet(db, second.data, second.includes, second), true);
+  saveDb(db, dbPath);
+
+  const staleServerDb = await openDb(dbPath);
+  const liveDb = await openDb(dbPath);
+  assert.equal(await removeXStreamItemAndSave(liveDb, dbPath, '908'), true);
+  assert.equal(await removeXStreamItemAndSave(staleServerDb, dbPath, '909'), true);
+
+  const reopened = await openDb(dbPath);
+  assert.equal(saveXStreamTweet(reopened, first.data, first.includes, first), false);
+  assert.equal(saveXStreamTweet(reopened, second.data, second.includes, second), false);
+  assert.equal(listXStreamItems(reopened).length, 0);
+
+  db.close();
+  staleServerDb.close();
   liveDb.close();
   reopened.close();
   fs.rmSync(dir, { recursive: true, force: true });

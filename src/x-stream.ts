@@ -424,6 +424,15 @@ async function saveDbPreservingXRemovals(db: Database, dbPath: string): Promise<
   saveDb(db, dbPath);
 }
 
+function tombstoneXStreamItem(db: Database, tweetId: string): boolean {
+  db.run(
+    `INSERT OR REPLACE INTO x_stream_removed_items (tweet_id, removed_at) VALUES (?, ?)`,
+    [tweetId, nowIso()],
+  );
+  db.run(`DELETE FROM x_stream_items WHERE tweet_id = ?`, [tweetId]);
+  return db.getRowsModified() > 0;
+}
+
 function rowToWatchAccount(row: unknown[]): XWatchAccount {
   return {
     id: Number(row[0]),
@@ -820,6 +829,7 @@ export function saveXStreamTweet(
   const removed = db.exec(`SELECT tweet_id FROM x_stream_removed_items WHERE tweet_id = ? LIMIT 1`, [tweet.id]);
   if (removed[0]?.values?.length) return false;
   const watch = getWatchByUserId(db).get(tweet.author_id);
+  if (!watch) return false;
   const users = getUserById(includes);
   const user = users.get(tweet.author_id);
   const username = normalizeXHandle(user?.username || watch?.handle || tweet.author_id);
@@ -1302,13 +1312,16 @@ export function getXStreamItem(db: Database, tweetId: string): XStreamItem | nul
 
 export function removeXStreamItem(db: Database, dbPath: string, tweetId: string): boolean {
   initXStreamSchema(db);
-  db.run(
-    `INSERT OR REPLACE INTO x_stream_removed_items (tweet_id, removed_at) VALUES (?, ?)`,
-    [tweetId, nowIso()],
-  );
-  db.run(`DELETE FROM x_stream_items WHERE tweet_id = ?`, [tweetId]);
-  const removed = db.getRowsModified() > 0;
+  const removed = tombstoneXStreamItem(db, tweetId);
   if (dbPath !== ':memory:') saveDb(db, dbPath);
+  return removed;
+}
+
+export async function removeXStreamItemAndSave(db: Database, dbPath: string, tweetId: string): Promise<boolean> {
+  initXStreamSchema(db);
+  await mergeXStreamRemovedItemsFromDisk(db, dbPath);
+  const removed = tombstoneXStreamItem(db, tweetId);
+  await saveDbPreservingXRemovals(db, dbPath);
   return removed;
 }
 
@@ -1347,6 +1360,18 @@ export function removeXStreamItems(
   }
   if (dbPath !== ':memory:') saveDb(db, dbPath);
   return tweetIds.length;
+}
+
+export async function removeXStreamItemsAndSave(
+  db: Database,
+  dbPath: string,
+  options: { sourceAccount?: string } = {},
+): Promise<number> {
+  initXStreamSchema(db);
+  await mergeXStreamRemovedItemsFromDisk(db, dbPath);
+  const removed = removeXStreamItems(db, ':memory:', options);
+  await saveDbPreservingXRemovals(db, dbPath);
+  return removed;
 }
 
 function xStreamItemToBookmarkRecord(item: XStreamItem): BookmarkRecord {

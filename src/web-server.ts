@@ -34,8 +34,8 @@ import {
   pollAllXWatchAccountsViaBrowser,
   pollXWatchAccountViaBrowser,
   removeXWatchAccount,
-  removeXStreamItem,
-  removeXStreamItems,
+  removeXStreamItemAndSave,
+  removeXStreamItemsAndSave,
   manualXBrowserPollOptions,
   runXBrowserPollInBackground,
   runXBrowserPollOnce,
@@ -1611,7 +1611,14 @@ async function handleApi(
 
     if (req.method === 'DELETE' && pathname === '/api/x/feed') {
       const account = url.searchParams.get('account') || undefined;
-      const removed = removeXStreamItems(db, dbPath, account ? { sourceAccount: account } : {});
+      const freshDb = await openDb(dbPath);
+      let removed = 0;
+      try {
+        removed = await removeXStreamItemsAndSave(freshDb, dbPath, account ? { sourceAccount: account } : {});
+      } finally {
+        freshDb.close();
+      }
+      await reloadStateDb(dbPath, state);
       sendJson(res, { success: true, removed, account: account ?? null });
       return;
     }
@@ -1626,7 +1633,14 @@ async function handleApi(
 
     const feedItemMatch = pathname.match(/^\/api\/x\/feed\/([^/]+)$/);
     if (req.method === 'DELETE' && feedItemMatch) {
-      const removed = removeXStreamItem(db, dbPath, decodeURIComponent(feedItemMatch[1]));
+      const freshDb = await openDb(dbPath);
+      let removed = false;
+      try {
+        removed = await removeXStreamItemAndSave(freshDb, dbPath, decodeURIComponent(feedItemMatch[1]));
+      } finally {
+        freshDb.close();
+      }
+      await reloadStateDb(dbPath, state);
       sendJson(res, { success: true, removed });
       return;
     }
