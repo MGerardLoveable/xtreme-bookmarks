@@ -832,7 +832,12 @@ export async function syncBookmarksGraphQL(
     totalBookmarks: existing.length,
   } satisfies BookmarkCacheMeta);
   // Save cursor for resumption if sync stopped before reaching the end
-  const terminalReasons = new Set(['end of bookmarks', 'caught up to newest stored bookmark']);
+  const terminalReasons = new Set([
+    'end of bookmarks',
+    'caught up to newest stored bookmark',
+    'no new bookmarks (empty pages)',
+    'no new bookmarks (stale)',
+  ]);
   const savedCursor = terminalReasons.has(stopReason) ? undefined : cursor;
 
   await writeJson(statePath, updateState(prevState, {

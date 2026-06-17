@@ -99,6 +99,13 @@ type WebBackfillState = {
   lastCursor?: string;
 };
 
+const RESUMABLE_WEB_GRAB_REASONS = new Set([
+  'checkpoint',
+  'max pages reached',
+  'max runtime reached',
+  'unknown',
+]);
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function resolveWebDir(): string {
@@ -164,7 +171,10 @@ async function buildWebGrabSyncOptions(
     loadWebBackfillState(),
     readJsonLines(twitterBookmarksCachePath()),
   ]);
-  const resumeCursor = backfillState?.lastCursor;
+  const resumeCursor =
+    backfillState?.lastCursor && RESUMABLE_WEB_GRAB_REASONS.has(backfillState?.stopReason ?? 'unknown')
+      ? backfillState.lastCursor
+      : undefined;
   const shouldContinueBackfill =
     Boolean(resumeCursor) ||
     (
