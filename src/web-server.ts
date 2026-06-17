@@ -7,12 +7,11 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import type { Database } from 'sql.js';
 import { openDb, saveDb } from './db.js';
-import { twitterBookmarksIndexPath, mdDir } from './paths.js';
+import { twitterBookmarksIndexPath, mdDir, twitterBookmarksCachePath, twitterBackfillStatePath } from './paths.js';
 import { deleteTwitterBookmark, syncTwitterBookmarks } from './bookmarks.js';
-import { syncBookmarksGraphQL } from './graphql-bookmarks.js';
+import { syncBookmarksGraphQL, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
 import { buildIndex, updateBookmarkWikiStatus, ensureMigrations } from './bookmarks-db.js';
-import { twitterBookmarksCachePath } from './paths.js';
-import { readJsonLines, writeJsonLines } from './fs.js';
+import { readJson, readJsonLines, writeJsonLines } from './fs.js';
 import { browserUserDataDir, getBrowser, listBrowserIds } from './browsers.js';
 import { addBookmarkToWiki, compileMd } from './md.js';
 import { consolidateMemoryTiers, getMemoryTierStats } from './memory-tier.js';
@@ -89,6 +88,17 @@ let activeAuthFlow: {
   url: string;
 } | null = null;
 
+const WEB_GRAB_MAX_PAGES = 1_000;
+const WEB_GRAB_MAX_MINUTES = 60;
+const WEB_GRAB_CONTINUE_THRESHOLD = 1_000;
+const WEB_GRAB_PAGE_SIZE = 100;
+const WEB_GRAB_CHECKPOINT_EVERY = 5;
+
+type WebBackfillState = {
+  stopReason?: string;
+  lastCursor?: string;
+};
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function resolveWebDir(): string {
@@ -136,6 +146,44 @@ function sendJson(res: http.ServerResponse, data: unknown, status = 200): void {
 
 function sendError(res: http.ServerResponse, message: string, status = 500): void {
   sendJson(res, { error: message }, status);
+}
+
+async function loadWebBackfillState(): Promise<WebBackfillState | undefined> {
+  try {
+    return await readJson<WebBackfillState>(twitterBackfillStatePath());
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildWebGrabSyncOptions(
+  browser: string | undefined,
+  onProgress?: (status: SyncProgress) => void
+): Promise<SyncOptions> {
+  const [backfillState, cachedBookmarks] = await Promise.all([
+    loadWebBackfillState(),
+    readJsonLines(twitterBookmarksCachePath()),
+  ]);
+  const resumeCursor = backfillState?.lastCursor;
+  const shouldContinueBackfill =
+    Boolean(resumeCursor) ||
+    (
+      cachedBookmarks.length >= WEB_GRAB_CONTINUE_THRESHOLD &&
+      backfillState?.stopReason !== 'end of bookmarks'
+    );
+
+  return {
+    incremental: !shouldContinueBackfill,
+    resumeCursor,
+    stalePageLimit: shouldContinueBackfill ? Infinity : undefined,
+    maxPages: WEB_GRAB_MAX_PAGES,
+    pageSize: WEB_GRAB_PAGE_SIZE,
+    checkpointEvery: WEB_GRAB_CHECKPOINT_EVERY,
+    delayMs: 600,
+    maxMinutes: WEB_GRAB_MAX_MINUTES,
+    browser,
+    onProgress,
+  };
 }
 
 function sendXApiError(res: http.ServerResponse, err: unknown): boolean {
@@ -1271,7 +1319,7 @@ async function handleApi(
           const browser = getBrowser(browserId);
           send('status', { stage: 'syncing', message: `Trying ${browser.displayName} session...` });
           try {
-            syncResult = await syncBookmarksGraphQL({ incremental: true, maxPages: 50, delayMs: 600, maxMinutes: 5, browser: browserId, onProgress: (s) => send('progress', s) });
+            syncResult = await syncBookmarksGraphQL(await buildWebGrabSyncOptions(browserId, (s) => send('progress', s)));
             break;
           } catch (browserErr) {
             if (!isCookieReadFailure(browserErr)) throw browserErr;
@@ -1309,7 +1357,7 @@ async function handleApi(
               : `Could not sync from any installed browser session.\n\n` +
                 `Last browser error: ${browserMessage}\n\n` +
                 `OAuth fallback also failed: ${apiMessage}\n\n` +
-                'Fix: log into X in Brave/Comet, close Chrome/Edge completely and retry, or run: node bin/ft.mjs auth'
+                'Safari is not supported as a cookie source. Fix: log into X in Chrome, Brave, Comet, Edge, Chromium, or Firefox and retry, or run: node bin/ft.mjs auth'
             );
             (error as Error & { authUrl?: string }).authUrl = authUrl;
             throw error;

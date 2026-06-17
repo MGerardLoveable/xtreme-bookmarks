@@ -294,7 +294,7 @@ export async function loadXGraphQLSession(
   const config = loadChromeSessionConfig({ browserId: options.browser });
   const chromeProfile = options.chromeProfileDirectory ?? config.chromeProfileDirectory;
   const cached = await loadCachedSessionCookies(config.browser.id, chromeProfile);
-  const anyCached = await loadAnyCachedSessionCookies();
+  const anyCached = options.browser ? null : await loadAnyCachedSessionCookies();
   if (anyCached) {
     return { csrfToken: anyCached.csrfToken, cookieHeader: anyCached.cookieHeader };
   }
@@ -493,11 +493,36 @@ export function parseBookmarksResponse(json: any, now?: string): PageResult {
   return { records, nextCursor };
 }
 
+const GRAPHQL_FETCH_TIMEOUT_MS = 30_000;
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError';
+}
+
 async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHeader?: string, pageSize?: number): Promise<PageResult> {
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(buildUrl(cursor, pageSize), { headers: buildXGraphQLHeaders(csrfToken, cookieHeader) });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GRAPHQL_FETCH_TIMEOUT_MS);
+    let response: Response;
+
+    try {
+      response = await fetch(buildUrl(cursor, pageSize), {
+        headers: buildXGraphQLHeaders(csrfToken, cookieHeader),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      lastError = isAbortError(err)
+        ? new Error(`GraphQL Bookmarks API request timed out on attempt ${attempt + 1}`)
+        : err instanceof Error
+          ? err
+          : new Error(String(err));
+      await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
+      continue;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (response.status === 429) {
       const waitSec = Math.min(15 * Math.pow(2, attempt), 120);
@@ -629,6 +654,19 @@ export async function syncBookmarksGraphQL(
   let cursor: string | undefined = options.resumeCursor;
   const allSeenIds: string[] = [];
   let stopReason = 'unknown';
+  let emptyPages = 0;
+  const checkpointState = async (reason: string) => {
+    await writeJson(statePath, {
+      ...prevState,
+      provider: 'twitter',
+      lastRunAt: new Date().toISOString(),
+      totalAdded: prevState.totalAdded + totalAdded,
+      lastAdded: totalAdded,
+      lastSeenIds: allSeenIds.slice(-20),
+      stopReason: reason,
+      lastCursor: cursor,
+    } satisfies BookmarkBackfillState);
+  };
 
   while (page < maxPages) {
     if (Date.now() - started > maxMinutes * 60_000) {
@@ -641,6 +679,11 @@ export async function syncBookmarksGraphQL(
 
     if (result.records.length === 0 && !result.nextCursor) {
       stopReason = 'end of bookmarks';
+      break;
+    }
+    emptyPages = result.records.length === 0 ? emptyPages + 1 : 0;
+    if (emptyPages >= 3) {
+      stopReason = 'no new bookmarks (empty pages)';
       break;
     }
 
@@ -680,7 +723,10 @@ export async function syncBookmarksGraphQL(
       break;
     }
 
-    if (page % checkpointEvery === 0) await writeJsonLines(cachePath, existing);
+    if (page % checkpointEvery === 0) {
+      await writeJsonLines(cachePath, existing);
+      await checkpointState('checkpoint');
+    }
 
     if (page < maxPages) await new Promise((r) => setTimeout(r, delayMs));
   }
@@ -707,6 +753,7 @@ export async function syncBookmarksGraphQL(
     const scanStartPage = page;
 
     let continueAdded = 0;
+    emptyPages = 0;
 
     options.onProgress?.({
       page,
@@ -729,6 +776,11 @@ export async function syncBookmarksGraphQL(
 
       if (result.records.length === 0 && !result.nextCursor) {
         stopReason = 'end of bookmarks';
+        break;
+      }
+      emptyPages = result.records.length === 0 ? emptyPages + 1 : 0;
+      if (emptyPages >= 3) {
+        stopReason = 'no new bookmarks (empty pages)';
         break;
       }
 
@@ -756,7 +808,10 @@ export async function syncBookmarksGraphQL(
         break;
       }
 
-      if (page % checkpointEvery === 0) await writeJsonLines(cachePath, existing);
+      if (page % checkpointEvery === 0) {
+        await writeJsonLines(cachePath, existing);
+        await checkpointState('checkpoint');
+      }
 
       if (page < maxPages) await new Promise((r) => setTimeout(r, delayMs));
     }

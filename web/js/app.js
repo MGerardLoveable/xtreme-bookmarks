@@ -264,9 +264,14 @@ async function runGrab() {
       window.open(url, '_blank', 'noopener');
     };
     await api.grabStream((event, data) => {
-      if (event === 'progress' && data && typeof data.added === 'number') addedCount = data.added;
+      if (event === 'progress' && data) {
+        if (typeof data.newAdded === 'number') addedCount = data.newAdded;
+        else if (typeof data.added === 'number') addedCount = data.added;
+      }
+      if (event === 'status' && data && data.message) toast(data.message, 2500);
       if (event === 'done') {
-        toast(addedCount ? `Added ${addedCount} new bookmark${addedCount === 1 ? '' : 's'}` : 'No new bookmarks');
+        const doneAdded = typeof data?.added === 'number' ? data.added : addedCount;
+        toast(doneAdded ? `Added ${doneAdded} new bookmark${doneAdded === 1 ? '' : 's'}` : 'No new bookmarks');
         refreshStatusBar();
         if (views.library && views.library.refresh) views.library.refresh();
       }
