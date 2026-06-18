@@ -58,6 +58,12 @@ const viewFactories = {
 };
 
 let currentView = null;
+const grabState = {
+  running: false,
+  startedAt: 0,
+  message: '',
+  state: 'idle',
+};
 
 function mountView(name) {
   const root = document.querySelector(`.view[data-view="${name}"]`);
@@ -253,53 +259,120 @@ function closeHelp() { $('#help-overlay').hidden = true; }
 function isHelpOpen() { const o = $('#help-overlay'); return o && !o.hidden; }
 
 // ── Grab (sync new bookmarks) ───────────────────────────────────────────────
+function setGrabStatus(state, message, progress = {}) {
+  grabState.state = state;
+  grabState.message = message || '';
+  if (state === 'starting' || state === 'syncing' || state === 'indexing') {
+    grabState.running = true;
+    if (!grabState.startedAt) grabState.startedAt = Date.now();
+  } else {
+    grabState.running = false;
+    grabState.startedAt = 0;
+  }
+
+  const btn = $('#grab-btn');
+  if (btn) {
+    const busy = grabState.running;
+    btn.disabled = busy;
+    btn.classList.toggle('is-syncing', busy);
+    btn.setAttribute('aria-busy', String(busy));
+    btn.title = busy ? message || 'Grab running' : 'Grab new bookmarks';
+    btn.setAttribute('aria-label', busy ? message || 'Grab running' : 'Grab new bookmarks');
+  }
+
+  const status = $('#status-grab');
+  const sep = document.querySelector('.status-grab-sep');
+  if (status) {
+    const show = state !== 'idle';
+    status.hidden = !show;
+    if (sep) sep.hidden = !show;
+    status.textContent = show ? message : '';
+    status.dataset.state = state;
+  }
+
+  window.__xbGrabStatus = { state, message, progress };
+  document.dispatchEvent(new CustomEvent('xb:grab-status', {
+    detail: { state, message, progress },
+  }));
+}
+
+function clearGrabStatusSoon() {
+  setTimeout(() => {
+    if (!grabState.running) setGrabStatus('idle', '');
+  }, 5000);
+}
+
 async function runGrab() {
-  toast('Grabbing new bookmarks…');
+  if (grabState.running) {
+    toast(grabState.message || 'Bookmark grab is already running.', 3000);
+    return;
+  }
+  setGrabStatus('starting', 'Starting bookmark grab...');
+  toast('Starting bookmark grab...');
   try {
     let addedCount = 0;
     let lastProgressToastAt = 0;
     let openedAuthUrl = '';
+    let sawTerminalEvent = false;
     const openAuthUrl = (url) => {
       if (!url || openedAuthUrl === url) return;
       openedAuthUrl = url;
       window.open(url, '_blank', 'noopener');
     };
     await api.grabStream((event, data) => {
+      if (event === 'done' || event === 'error' || event === 'cancelled') sawTerminalEvent = true;
       if (event === 'progress' && data) {
         if (typeof data.newAdded === 'number') addedCount = data.newAdded;
         else if (typeof data.added === 'number') addedCount = data.added;
         if (typeof data.totalFetched === 'number') {
           const now = Date.now();
+          const page = typeof data.page === 'number' ? `Page ${fmtNumber(data.page)} · ` : '';
+          const reason = data.stopReason ? ` · ${data.stopReason}` : '';
+          const message = `${page}Scanned ${fmtNumber(data.totalFetched)} · ${fmtNumber(addedCount)} new${reason}`;
+          setGrabStatus(data.done ? 'indexing' : 'syncing', message, data);
           if (data.done || now - lastProgressToastAt > 1500) {
-            const page = typeof data.page === 'number' ? `Page ${fmtNumber(data.page)} · ` : '';
-            const reason = data.stopReason ? ` · ${data.stopReason}` : '';
-            toast(`${page}Scanned ${fmtNumber(data.totalFetched)} · ${fmtNumber(addedCount)} new${reason}`, 3500);
+            toast(message, 3500);
             lastProgressToastAt = now;
           }
         }
       }
-      if (event === 'status' && data && data.message) toast(data.message, 2500);
+      if (event === 'status' && data && data.message) {
+        const nextState = data.stage === 'indexing' ? 'indexing' : 'syncing';
+        setGrabStatus(nextState, data.message);
+        toast(data.message, 2500);
+      }
       if (event === 'done') {
         const doneAdded = typeof data?.added === 'number' ? data.added : addedCount;
-        toast(doneAdded ? `Added ${doneAdded} new bookmark${doneAdded === 1 ? '' : 's'}` : 'No new bookmarks');
+        const message = doneAdded ? `Added ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}` : `No new bookmarks · ${data?.stopReason || 'complete'}`;
+        setGrabStatus('done', message, data || {});
+        toast(message, 4500);
         refreshStatusBar();
         if (views.library && views.library.refresh) views.library.refresh();
+        clearGrabStatusSoon();
       }
       if (event === 'auth_required') {
         openAuthUrl(data && data.url);
+        setGrabStatus('error', (data && data.message) || 'Authorization required.');
         toast((data && data.message) || 'Authorize Xtreme Bookmarks with X, then press Grab again.', 8000);
       }
       if (event === 'error') {
         if (data && data.authUrl) {
           openAuthUrl(data.authUrl);
+          setGrabStatus('error', 'Authorization required. Approve X access, then press Grab again.');
           toast('Authorization required. Approve X access in the new tab, then press Grab again.', 8000);
         } else {
-          toast(`Grab failed: ${data && data.message ? data.message : 'unknown'}`);
+          const message = data && data.message ? data.message : 'unknown';
+          setGrabStatus('error', `Grab failed: ${message}`, data || {});
+          toast(`Grab failed: ${message}`, 8000);
         }
+        clearGrabStatusSoon();
       }
     });
+    if (!sawTerminalEvent) throw new Error('Grab stream ended before completion.');
   } catch (err) {
+    setGrabStatus('error', `Grab failed: ${err.message}`);
     toast(`Grab failed: ${err.message}`);
+    clearGrabStatusSoon();
   }
 }
 

@@ -148,6 +148,8 @@ export interface SyncOptions {
   resumeCursor?: string;
   /** Flush to disk every N pages. Default: 25 */
   checkpointEvery?: number;
+  /** Cancel a long-running sync. */
+  abortSignal?: AbortSignal;
 }
 
 export interface SyncProgress {
@@ -499,11 +501,37 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError';
 }
 
-async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHeader?: string, pageSize?: number): Promise<PageResult> {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('Bookmark grab cancelled.');
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Bookmark grab cancelled.'));
+      return;
+    }
+    const timeout = setTimeout(done, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(new Error('Bookmark grab cancelled.'));
+    };
+    function done() {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHeader?: string, pageSize?: number, abortSignal?: AbortSignal): Promise<PageResult> {
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt < 4; attempt++) {
+    throwIfAborted(abortSignal);
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
     const timeout = setTimeout(() => controller.abort(), GRAPHQL_FETCH_TIMEOUT_MS);
     let response: Response;
 
@@ -513,27 +541,29 @@ async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHead
         signal: controller.signal,
       });
     } catch (err) {
+      throwIfAborted(abortSignal);
       lastError = isAbortError(err)
         ? new Error(`GraphQL Bookmarks API request timed out on attempt ${attempt + 1}`)
         : err instanceof Error
           ? err
           : new Error(String(err));
-      await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
+      await sleep(5000 * (attempt + 1), abortSignal);
       continue;
     } finally {
       clearTimeout(timeout);
+      abortSignal?.removeEventListener('abort', onAbort);
     }
 
     if (response.status === 429) {
       const waitSec = Math.min(15 * Math.pow(2, attempt), 120);
       lastError = new Error(`Rate limited (429) on attempt ${attempt + 1}`);
-      await new Promise((r) => setTimeout(r, waitSec * 1000));
+      await sleep(waitSec * 1000, abortSignal);
       continue;
     }
 
     if (response.status >= 500) {
       lastError = new Error(`Server error (${response.status}) on attempt ${attempt + 1}`);
-      await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
+      await sleep(5000 * (attempt + 1), abortSignal);
       continue;
     }
 
@@ -629,6 +659,7 @@ export async function syncBookmarksGraphQL(
   const stalePageLimit = options.stalePageLimit ?? 3;
   const checkpointEvery = options.checkpointEvery ?? 25;
   const pageSize = Math.max(1, Math.min(options.pageSize ?? 20, 100));
+  const abortSignal = options.abortSignal;
 
   const { csrfToken, cookieHeader } = await loadXGraphQLSession(options);
 
@@ -669,12 +700,13 @@ export async function syncBookmarksGraphQL(
   };
 
   while (page < maxPages) {
+    throwIfAborted(abortSignal);
     if (Date.now() - started > maxMinutes * 60_000) {
       stopReason = 'max runtime reached';
       break;
     }
 
-    const result = await fetchPageWithRetry(csrfToken, cursor, cookieHeader, pageSize);
+    const result = await fetchPageWithRetry(csrfToken, cursor, cookieHeader, pageSize, abortSignal);
     page += 1;
 
     if (result.records.length === 0 && !result.nextCursor) {
@@ -728,7 +760,7 @@ export async function syncBookmarksGraphQL(
       await checkpointState('checkpoint');
     }
 
-    if (page < maxPages) await new Promise((r) => setTimeout(r, delayMs));
+    if (page < maxPages) await sleep(delayMs, abortSignal);
   }
 
   if (stopReason === 'unknown') stopReason = page >= maxPages ? 'max pages reached' : 'unknown';
@@ -766,12 +798,13 @@ export async function syncBookmarksGraphQL(
 
     // Continue paginating with no stale-page or caught-up limits
     while (page < maxPages) {
+      throwIfAborted(abortSignal);
       if (Date.now() - started > maxMinutes * 60_000) {
         stopReason = 'max runtime reached';
         break;
       }
 
-      const result = await fetchPageWithRetry(csrfToken, cursor, cookieHeader, pageSize);
+      const result = await fetchPageWithRetry(csrfToken, cursor, cookieHeader, pageSize, abortSignal);
       page += 1;
 
       if (result.records.length === 0 && !result.nextCursor) {
@@ -813,7 +846,7 @@ export async function syncBookmarksGraphQL(
         await checkpointState('checkpoint');
       }
 
-      if (page < maxPages) await new Promise((r) => setTimeout(r, delayMs));
+      if (page < maxPages) await sleep(delayMs, abortSignal);
     }
 
     if (stopReason !== 'end of bookmarks' && page >= maxPages) {

@@ -222,6 +222,7 @@ async function streamPost(path, onEvent, body) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let terminalEvent = false;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -236,9 +237,11 @@ async function streamPost(path, onEvent, body) {
         if (line.startsWith('event:')) event = line.slice(6).trim();
         else if (line.startsWith('data:')) data += line.slice(5).trim();
       }
+      if (event === 'done' || event === 'error' || event === 'cancelled') terminalEvent = true;
       try { onEvent(event, JSON.parse(data)); } catch { onEvent(event, data); }
     }
   }
+  if (!terminalEvent) throw new Error('Stream ended before completion.');
 }
 
 // Formatting helpers

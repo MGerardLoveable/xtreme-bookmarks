@@ -90,13 +90,19 @@ let activeAuthFlow: {
 
 const WEB_GRAB_MAX_PAGES = 1_000;
 const WEB_GRAB_MAX_MINUTES = 60;
-const WEB_GRAB_CONTINUE_THRESHOLD = 1_000;
 const WEB_GRAB_PAGE_SIZE = 100;
 const WEB_GRAB_CHECKPOINT_EVERY = 5;
 
 type WebBackfillState = {
   stopReason?: string;
   lastCursor?: string;
+};
+
+type WebRuntimeState = {
+  db: Database;
+  grabRunning?: boolean;
+  grabStartedAt?: string;
+  lastGrabProgress?: SyncProgress;
 };
 
 const RESUMABLE_WEB_GRAB_REASONS = new Set([
@@ -165,22 +171,15 @@ async function loadWebBackfillState(): Promise<WebBackfillState | undefined> {
 
 async function buildWebGrabSyncOptions(
   browser: string | undefined,
-  onProgress?: (status: SyncProgress) => void
+  onProgress?: (status: SyncProgress) => void,
+  mode: 'quick' | 'backfill' = 'quick',
 ): Promise<SyncOptions> {
-  const [backfillState, cachedBookmarks] = await Promise.all([
-    loadWebBackfillState(),
-    readJsonLines(twitterBookmarksCachePath()),
-  ]);
+  const backfillState = await loadWebBackfillState();
   const resumeCursor =
     backfillState?.lastCursor && RESUMABLE_WEB_GRAB_REASONS.has(backfillState?.stopReason ?? 'unknown')
       ? backfillState.lastCursor
       : undefined;
-  const shouldContinueBackfill =
-    Boolean(resumeCursor) ||
-    (
-      cachedBookmarks.length >= WEB_GRAB_CONTINUE_THRESHOLD &&
-      backfillState?.stopReason !== 'end of bookmarks'
-    );
+  const shouldContinueBackfill = mode === 'backfill' && Boolean(resumeCursor);
 
   return {
     incremental: !shouldContinueBackfill,
@@ -403,6 +402,11 @@ function toSortedCountEntries<T extends string | number>(map: Map<T, number>, ke
 function isCookieReadFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /Cookies database|cookie extraction|No ct0 CSRF cookie|resource busy|locked|EBUSY/i.test(message);
+}
+
+function isBrowserSessionFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return isCookieReadFailure(err) || /GraphQL Bookmarks API returned (401|403)|X session may have expired/i.test(message);
 }
 
 function installedBrowserIds(): string[] {
@@ -795,7 +799,7 @@ async function handleApi(
   res: http.ServerResponse,
   url: URL,
   pathname: string,
-  state?: { db: Database },
+  state?: WebRuntimeState,
 ): Promise<void> {
   try {
 
@@ -1315,12 +1319,41 @@ async function handleApi(
         sendError(res, err instanceof Error ? err.message : String(err), 500);
       }
       return;
-    }
+      }
 
     if (req.method === 'POST' && pathname === '/api/grab') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
-      const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      send('status', { stage: 'syncing', message: 'Grabbing new bookmarks from X...' });
+      let clientClosed = false;
+      const abortController = new AbortController();
+      res.on('close', () => {
+        clientClosed = true;
+        abortController.abort();
+      });
+      const send = (event: string, data: unknown) => {
+        if (clientClosed || res.destroyed || res.writableEnded) return false;
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        return true;
+      };
+
+      if (state?.grabRunning) {
+        send('error', {
+          code: 'grab_in_progress',
+          message: 'A bookmark grab is already running. Keep this tab open and wait for it to finish.',
+          startedAt: state.grabStartedAt,
+          progress: state.lastGrabProgress,
+        });
+        res.end();
+        return;
+      }
+
+      if (state) {
+        state.grabRunning = true;
+        state.grabStartedAt = new Date().toISOString();
+        state.lastGrabProgress = undefined;
+      }
+
+      const grabMode = url.searchParams.get('mode') === 'backfill' ? 'backfill' : 'quick';
+      send('status', { stage: 'syncing', message: grabMode === 'backfill' ? 'Continuing bookmark backfill from X...' : 'Grabbing latest bookmarks from X...' });
       try {
         let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
         let lastBrowserError: unknown;
@@ -1329,10 +1362,14 @@ async function handleApi(
           const browser = getBrowser(browserId);
           send('status', { stage: 'syncing', message: `Trying ${browser.displayName} session...` });
           try {
-            syncResult = await syncBookmarksGraphQL(await buildWebGrabSyncOptions(browserId, (s) => send('progress', s)));
+            const options = await buildWebGrabSyncOptions(browserId, (s) => {
+              if (state) state.lastGrabProgress = s;
+              send('progress', s);
+            }, grabMode);
+            syncResult = await syncBookmarksGraphQL({ ...options, abortSignal: abortController.signal });
             break;
           } catch (browserErr) {
-            if (!isCookieReadFailure(browserErr)) throw browserErr;
+            if (!isBrowserSessionFailure(browserErr)) throw browserErr;
             lastBrowserError = browserErr;
           }
         }
@@ -1379,7 +1416,13 @@ async function handleApi(
         if (shouldRebuild) await rebuildIndexAndReload(dbPath, state);
         send('done', syncResult);
       } catch (err) { send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl }); }
-      res.end();
+      finally {
+        if (state) {
+          state.grabRunning = false;
+          state.grabStartedAt = undefined;
+        }
+        if (!res.writableEnded) res.end();
+      }
       return;
     }
 
@@ -2047,14 +2090,21 @@ function openBrowser(url: string): void {
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
-async function autoGrab(state: { db: Database }, dbPath: string): Promise<void> {
+async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
   const ts = new Date().toLocaleTimeString();
+  if (state.grabRunning) return;
+  state.grabRunning = true;
+  state.grabStartedAt = new Date().toISOString();
   try {
     const syncResult = await syncBookmarksGraphQL({ incremental: true, maxPages: 50, delayMs: 600, maxMinutes: 5 });
     if (syncResult.added > 0) {
       await buildIndex(); state.db.close(); state.db = await openDb(dbPath);
     }
   } catch (err) { console.error(`  [${ts}] Auto-grab failed:`, (err as Error).message); }
+  finally {
+    state.grabRunning = false;
+    state.grabStartedAt = undefined;
+  }
 }
 
 async function autoUpdateXWatchlist(state: { db: Database }, dbPath: string): Promise<void> {
@@ -2067,7 +2117,7 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   const auth = getWebAuthConfig();
   const dbPath = twitterBookmarksIndexPath();
   if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: ft sync && ft index'); process.exitCode = 1; return; }
-  const state = { db: await openDb(dbPath) };
+  const state: WebRuntimeState = { db: await openDb(dbPath) };
   ensureMigrations(state.db);
   initBrainSchema(state.db);
   initXStreamSchema(state.db);

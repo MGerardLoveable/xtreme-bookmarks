@@ -105,6 +105,15 @@ body {
 .status-item strong { color: var(--fg); font-weight: 600; }
 .status-hint { opacity: 0.9; }
 .status-hint kbd { font-size: 10px; padding: 0 4px; }
+.status-grab {
+  color: var(--brand);
+  max-width: min(42vw, 520px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-grab[data-state="error"] { color: #b91c1c; }
+.status-grab[data-state="done"] { color: #166534; }
 
 /* Responsive */
 @media (max-width: 880px) {

@@ -121,6 +121,10 @@ export function LibraryView(root) {
             <span data-icon="x"></span>Clear
           </button>
         </div>
+        <div class="library-grab-status" id="lib-grab-status" hidden>
+          <span class="library-grab-spinner" aria-hidden="true"></span>
+          <span id="lib-grab-status-text">Grab starting...</span>
+        </div>
         <div class="active-filters" id="lib-active"></div>
         <div class="results-summary" id="lib-summary"><span>—</span></div>
         <div class="bookmark-list" id="lib-list"></div>
@@ -179,6 +183,8 @@ export function LibraryView(root) {
     displayMode: $('#lib-display-mode', root),
     active: $('#lib-active', root),
     summary: $('#lib-summary', root),
+    grabStatus: $('#lib-grab-status', root),
+    grabStatusText: $('#lib-grab-status-text', root),
     list: $('#lib-list', root),
     detail: $('#lib-detail', root),
     railStatus: $('#rail-status-list', root),
@@ -219,6 +225,18 @@ export function LibraryView(root) {
     localStorage.setItem(LS_LIBRARY_MODE, mode);
     applyPresentation();
   }
+
+  function updateGrabStatus(detail) {
+    if (!els.grabStatus || !els.grabStatusText) return;
+    const visible = detail && detail.state && detail.state !== 'idle';
+    els.grabStatus.hidden = !visible;
+    if (!visible) return;
+    els.grabStatus.dataset.state = detail.state;
+    els.grabStatusText.textContent = detail.message || 'Grab running...';
+  }
+
+  document.addEventListener('xb:grab-status', (event) => updateGrabStatus(event.detail));
+  updateGrabStatus(window.__xbGrabStatus);
 
   // ── Facets ────────────────────────────────────────────────────────────────
   async function loadFacets() {
