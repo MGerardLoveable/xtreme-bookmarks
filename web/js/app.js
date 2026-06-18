@@ -257,6 +257,7 @@ async function runGrab() {
   toast('Grabbing new bookmarks…');
   try {
     let addedCount = 0;
+    let lastProgressToastAt = 0;
     let openedAuthUrl = '';
     const openAuthUrl = (url) => {
       if (!url || openedAuthUrl === url) return;
@@ -267,6 +268,15 @@ async function runGrab() {
       if (event === 'progress' && data) {
         if (typeof data.newAdded === 'number') addedCount = data.newAdded;
         else if (typeof data.added === 'number') addedCount = data.added;
+        if (typeof data.totalFetched === 'number') {
+          const now = Date.now();
+          if (data.done || now - lastProgressToastAt > 1500) {
+            const page = typeof data.page === 'number' ? `Page ${fmtNumber(data.page)} · ` : '';
+            const reason = data.stopReason ? ` · ${data.stopReason}` : '';
+            toast(`${page}Scanned ${fmtNumber(data.totalFetched)} · ${fmtNumber(addedCount)} new${reason}`, 3500);
+            lastProgressToastAt = now;
+          }
+        }
       }
       if (event === 'status' && data && data.message) toast(data.message, 2500);
       if (event === 'done') {
