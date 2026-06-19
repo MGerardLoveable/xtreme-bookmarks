@@ -302,6 +302,14 @@ function clearGrabStatusSoon() {
   }, 5000);
 }
 
+function grabErrorMessage(err) {
+  const message = err && err.message ? err.message : String(err || 'unknown');
+  if (/Failed to fetch|NetworkError|Load failed|Network request failed/i.test(message)) {
+    return 'Grab failed: local Xtreme Bookmarks server is offline. Restart the app server and refresh this page.';
+  }
+  return `Grab failed: ${message}`;
+}
+
 async function runGrab() {
   if (grabState.running) {
     toast(grabState.message || 'Bookmark grab is already running.', 3000);
@@ -370,8 +378,9 @@ async function runGrab() {
     });
     if (!sawTerminalEvent) throw new Error('Grab stream ended before completion.');
   } catch (err) {
-    setGrabStatus('error', `Grab failed: ${err.message}`);
-    toast(`Grab failed: ${err.message}`);
+    const message = grabErrorMessage(err);
+    setGrabStatus('error', message);
+    toast(message, 8000);
     clearGrabStatusSoon();
   }
 }
