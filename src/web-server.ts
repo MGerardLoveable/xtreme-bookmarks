@@ -10,7 +10,7 @@ import { openDb, saveDb } from './db.js';
 import { twitterBookmarksIndexPath, mdDir, twitterBookmarksCachePath, twitterBackfillStatePath } from './paths.js';
 import { deleteTwitterBookmark, syncTwitterBookmarks } from './bookmarks.js';
 import { syncBookmarksGraphQL, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
-import { buildIndex, updateBookmarkWikiStatus, ensureMigrations } from './bookmarks-db.js';
+import { buildIndex, updateIndexIncrementally, updateBookmarkWikiStatus, ensureMigrations } from './bookmarks-db.js';
 import { readJson, readJsonLines, writeJsonLines } from './fs.js';
 import { browserUserDataDir, getBrowser, listBrowserIds } from './browsers.js';
 import { addBookmarkToWiki, compileMd } from './md.js';
@@ -100,6 +100,7 @@ type WebBackfillState = {
 
 type WebRuntimeState = {
   db: Database;
+  dbReloading?: boolean;
   grabRunning?: boolean;
   grabStartedAt?: string;
   lastGrabProgress?: SyncProgress;
@@ -468,11 +469,23 @@ async function handleOAuthCallback(reqUrl: URL, res: http.ServerResponse): Promi
   }
 }
 
-async function rebuildIndexAndReload(dbPath: string, state?: { db: Database }): Promise<void> {
-  await buildIndex();
+async function rebuildIndexAndReload(
+  dbPath: string,
+  state?: WebRuntimeState,
+  incremental = false,
+): Promise<void> {
   if (state) {
+    state.dbReloading = true;
     state.db.close();
-    state.db = await openDb(dbPath);
+  }
+  try {
+    if (incremental) await updateIndexIncrementally();
+    else await buildIndex();
+  } finally {
+    if (state) {
+      state.db = await openDb(dbPath);
+      state.dbReloading = false;
+    }
   }
 }
 
@@ -1380,7 +1393,7 @@ async function handleApi(
             const apiResult = await syncTwitterBookmarks('incremental', { targetAdds: 50 });
             send('progress', { added: apiResult.added, newAdded: apiResult.added, totalFetched: apiResult.totalBookmarks, running: false, done: true, stopReason: 'oauth api fallback' });
             send('status', { stage: apiResult.added > 0 ? 'indexing' : 'complete', message: apiResult.added > 0 ? 'Indexing...' : 'Done.' });
-            if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state);
+            if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state, true);
             send('done', { ...apiResult, provider: 'x-api', stopReason: 'oauth api fallback' });
             res.end();
             return;
@@ -1413,7 +1426,9 @@ async function handleApi(
 
         const shouldRebuild = syncResult.added > 0 || syncResult.bookmarkedAtRepaired > 0;
         send('status', { stage: shouldRebuild ? 'indexing' : 'complete', message: shouldRebuild ? 'Indexing...' : 'Done.' });
-        if (shouldRebuild) await rebuildIndexAndReload(dbPath, state);
+        if (shouldRebuild) {
+          await rebuildIndexAndReload(dbPath, state, syncResult.bookmarkedAtRepaired === 0);
+        }
         send('done', syncResult);
       } catch (err) { send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl }); }
       finally {
@@ -2098,7 +2113,7 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
   try {
     const syncResult = await syncBookmarksGraphQL({ incremental: true, maxPages: 50, delayMs: 600, maxMinutes: 5 });
     if (syncResult.added > 0) {
-      await buildIndex(); state.db.close(); state.db = await openDb(dbPath);
+      await rebuildIndexAndReload(dbPath, state, true);
     }
   } catch (err) { console.error(`  [${ts}] Auto-grab failed:`, (err as Error).message); }
   finally {
@@ -2169,7 +2184,14 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     }
 
     try {
-      if (pathname.startsWith('/api/')) { await handleApi(state.db, dbPath, req, res, url, pathname, state); return; }
+      if (pathname.startsWith('/api/')) {
+        if (state.dbReloading) {
+          sendError(res, 'Bookmark index is refreshing. Try again in a moment.', 503);
+          return;
+        }
+        await handleApi(state.db, dbPath, req, res, url, pathname, state);
+        return;
+      }
 
       // Static
       const filePath = pathname === '/' ? path.join(webDir, 'index.html') : path.join(webDir, pathname);

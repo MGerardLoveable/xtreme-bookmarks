@@ -1,4 +1,5 @@
 import { access, appendFile, mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 
 interface WriteOptions {
@@ -54,6 +55,27 @@ export async function readJsonLines<T>(filePath: string): Promise<T[]> {
       .map((line) => JSON.parse(line) as T);
   } catch {
     return [];
+  }
+}
+
+export async function* iterateJsonLines<T>(filePath: string): AsyncGenerator<T> {
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  let buffered = '';
+  try {
+    for await (const chunk of input) {
+      buffered += chunk;
+      let newline = buffered.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffered.slice(0, newline).trim();
+        buffered = buffered.slice(newline + 1);
+        if (line) yield JSON.parse(line) as T;
+        newline = buffered.indexOf('\n');
+      }
+    }
+    const finalLine = buffered.trim();
+    if (finalLine) yield JSON.parse(finalLine) as T;
+  } finally {
+    input.destroy();
   }
 }
 

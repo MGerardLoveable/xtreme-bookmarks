@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js';
 import { openDb, saveDb } from './db.js';
 import { parseTimestampMs, toIsoDate } from './date-utils.js';
-import { readJsonLines } from './fs.js';
+import { iterateJsonLines, readJsonLines } from './fs.js';
 import { twitterBookmarksCachePath, twitterBookmarksIndexPath } from './paths.js';
 import type { BookmarkRecord, QuotedTweetSnapshot } from './types.js';
 import { classifyCorpus, formatClassificationSummary } from './bookmark-classify.js';
@@ -469,6 +469,52 @@ export async function buildIndex(options?: { force?: boolean }): Promise<{ dbPat
     saveDb(db, dbPath);
     const totalRows = db.exec('SELECT COUNT(*) FROM bookmarks')[0]?.values[0]?.[0] as number;
     return { dbPath, recordCount: totalRows, newRecords: newRecords.length };
+  } finally {
+    db.close();
+  }
+}
+
+export async function updateIndexIncrementally(): Promise<{ dbPath: string; recordCount: number; newRecords: number }> {
+  const cachePath = twitterBookmarksCachePath();
+  const dbPath = twitterBookmarksIndexPath();
+  const db = await openDb(dbPath);
+  try {
+    ensureMigrations(db);
+    initSchema(db);
+
+    const existingRows = db.exec('SELECT id FROM bookmarks');
+    const existingIds = new Set(
+      (existingRows[0]?.values ?? []).map((row) => String(row[0])),
+    );
+    let newRecords = 0;
+
+    db.run('BEGIN TRANSACTION');
+    try {
+      for await (const record of iterateJsonLines<BookmarkRecord>(cachePath)) {
+        if (existingIds.has(record.id)) continue;
+        insertRecord(db, record);
+        const row = db.exec(
+          'SELECT rowid, text, author_handle, author_name FROM bookmarks WHERE id = ?',
+          [record.id],
+        )[0]?.values?.[0];
+        if (row) {
+          db.run(
+            'INSERT INTO bookmarks_fts(rowid, text, author_handle, author_name) VALUES (?, ?, ?, ?)',
+            [row[0], row[1], row[2], row[3]],
+          );
+        }
+        existingIds.add(record.id);
+        newRecords += 1;
+      }
+      db.run('COMMIT');
+    } catch (err) {
+      db.run('ROLLBACK');
+      throw err;
+    }
+
+    if (newRecords > 0) saveDb(db, dbPath);
+    const recordCount = Number(db.exec('SELECT COUNT(*) FROM bookmarks')[0]?.values[0]?.[0] ?? 0);
+    return { dbPath, recordCount, newRecords };
   } finally {
     db.close();
   }

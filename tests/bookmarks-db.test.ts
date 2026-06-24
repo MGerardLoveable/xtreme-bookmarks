@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildIndex, searchBookmarks, getStats, formatSearchResults, getBookmarkById } from '../src/bookmarks-db.js';
+import { buildIndex, updateIndexIncrementally, searchBookmarks, getStats, formatSearchResults, getBookmarkById } from '../src/bookmarks-db.js';
 import { openDb, saveDb } from '../src/db.js';
 import { twitterBookmarksIndexPath } from '../src/paths.js';
 
@@ -79,6 +79,31 @@ test('buildIndex refreshes existing rows without dropping classifications', asyn
     assert.deepEqual(bookmark.domains, ['example.com']);
     assert.equal(bookmark.primaryDomain, 'example.com');
     assert.deepEqual(bookmark.githubUrls, ['https://github.com/openai/test']);
+  });
+});
+
+test('updateIndexIncrementally adds new rows without rebuilding existing rows', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    const added = {
+      ...FIXTURES[0],
+      id: '4',
+      tweetId: '4',
+      url: 'https://x.com/carol/status/4',
+      text: 'A newly\u2028synced bookmark',
+      authorHandle: 'carol',
+    };
+    const jsonl = [...FIXTURES, added].map((r) => JSON.stringify(r)).join('\n') + '\n';
+    await writeFile(path.join(process.env.FT_DATA_DIR!, 'bookmarks.jsonl'), jsonl);
+
+    const result = await updateIndexIncrementally();
+    assert.equal(result.recordCount, 4);
+    assert.equal(result.newRecords, 1);
+    assert.equal((await searchBookmarks({ query: 'newly synced' }))[0]?.id, '4');
+
+    const repeated = await updateIndexIncrementally();
+    assert.equal(repeated.recordCount, 4);
+    assert.equal(repeated.newRecords, 0);
   });
 });
 

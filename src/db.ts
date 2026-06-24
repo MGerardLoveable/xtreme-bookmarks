@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
 const WASM_PAGE_BYTES = 64 * 1024;
-const DEFAULT_SQL_WASM_INITIAL_MB = 512;
+const DEFAULT_SQL_WASM_INITIAL_MB = 256;
 const DEFAULT_SQL_WASM_MAX_MB = 2048;
 
 function readMemoryMb(name: string, fallback: number): number {
