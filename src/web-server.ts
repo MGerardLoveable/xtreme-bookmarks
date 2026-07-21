@@ -2348,10 +2348,12 @@ export async function startWebServer(port: number = 3848): Promise<void> {
         res.writeHead(200, headers);
         res.end(fs.readFileSync(filePath));
       } else {
+        if (!isContained || path.extname(requestedPath)) {
+          sendError(res, 'Not found', 404);
+          return;
+        }
         const indexPath = path.join(webDir, 'index.html');
-        console.log(`[Static] Not found: ${filePath}. Trying fallback: ${indexPath}`);
         if (fs.existsSync(indexPath)) {
-          console.log(`[Static] Serving fallback index.html`);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(fs.readFileSync(indexPath));
         } else {
