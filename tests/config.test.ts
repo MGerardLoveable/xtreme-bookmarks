@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadChromeSessionConfig } from '../src/config.js';
+import { browserUserDataDir } from '../src/browsers.js';
 
 test('loadChromeSessionConfig reads chrome user data dir and profile directory from env', () => {
   const savedBrowser = process.env.FT_BROWSER;
@@ -58,5 +59,5 @@ test('loadChromeSessionConfig: --browser firefox resolves correctly', () => {
   const config = loadChromeSessionConfig({ browserId: 'firefox' });
   assert.equal(config.browser.id, 'firefox');
   assert.equal(config.browser.cookieBackend, 'firefox');
-  assert.match(config.chromeUserDataDir, /Firefox/);
+  assert.equal(config.chromeUserDataDir, browserUserDataDir(config.browser));
 });
