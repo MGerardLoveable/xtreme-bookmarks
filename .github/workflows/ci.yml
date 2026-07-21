@@ -48,3 +48,11 @@ jobs:
 
       - name: Verify npm package
         run: npm run verify:package
+
+      - name: Audit production dependencies
+        if: matrix.node-version == 22
+        run: npm audit --omit=dev
+
+      - name: Verify deployment scripts
+        if: matrix.node-version == 22
+        run: ./scripts/verify-lightsail-deploy.sh
