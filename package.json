@@ -13,6 +13,7 @@
     "test": "tsx --test tests/*.test.ts",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
+    "service:install:mac": "bash scripts/install-macos-service.sh",
     "verify:package": "node scripts/verify-package.mjs",
     "release:check": "npm run typecheck && npm run build && npm test && npm run verify:package",
     "prepublishOnly": "npm run release:check"
@@ -20,6 +21,7 @@
   "files": [
     "bin/",
     "dist/",
+    "scripts/install-macos-service.sh",
     "web/",
     "LICENSE",
     "README.md"
