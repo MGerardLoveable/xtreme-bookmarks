@@ -1,7 +1,7 @@
 /**
  * Markdown wiki health checks.
  *
- * ft lint [--fix]
+ * xb lint [--fix]
  *
  * All checks are local — no LLM required.
  */
@@ -79,7 +79,7 @@ export async function lintMd(): Promise<LintResult> {
 
   if (!(await pathExists(mdDir()))) {
     return {
-      issues: [{ type: 'missing', detail: 'Markdown directory does not exist. Run: ft md', fixable: false }],
+      issues: [{ type: 'missing', detail: 'Markdown directory does not exist. Run: xb md', fixable: false }],
       stats: { totalPages: 0, totalLinks: 0, healthScore: 0 },
     };
   }

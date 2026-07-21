@@ -6,7 +6,7 @@ import { exec } from 'node:child_process';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import type { Database } from 'sql.js';
-import { openDb, saveDb } from './db.js';
+import { backupDb, databaseIntegrity, listDbBackups, openDb, saveDb } from './db.js';
 import { twitterBookmarksIndexPath, mdDir, twitterBookmarksCachePath, twitterBackfillStatePath } from './paths.js';
 import { deleteTwitterBookmark, syncTwitterBookmarks } from './bookmarks.js';
 import { syncBookmarksGraphQL, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
@@ -18,6 +18,12 @@ import { consolidateMemoryTiers, getMemoryTierStats } from './memory-tier.js';
 import { getGraphStats, exportGraphAsMermaid, loadGraph } from './graph.js';
 import { runMaintenanceAgent, exportHealthReportAsJson } from './agents.js';
 import { askMd } from './md-ask.js';
+import {
+  listKnowledgeAnnotationsFromDb,
+  listKnowledgeItemsFromDb,
+  listKnowledgeTopicsFromDb,
+  retrieveKnowledgeEvidenceFromDb,
+} from './knowledge-service.js';
 import { detectAvailableEngines, getGrokOauthStatus } from './engine.js';
 import { loadPreferences } from './preferences.js';
 import { loadEnv } from './config.js';
@@ -103,8 +109,19 @@ type WebRuntimeState = {
   dbReloading?: boolean;
   grabRunning?: boolean;
   grabStartedAt?: string;
+  lastGrabSucceededAt?: string;
+  lastGrabError?: string;
   lastGrabProgress?: SyncProgress;
 };
+
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super(`Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes.`);
+    this.name = 'BodyTooLargeError';
+  }
+}
 
 const RESUMABLE_WEB_GRAB_REASONS = new Set([
   'checkpoint',
@@ -153,7 +170,7 @@ function sendJson(res: http.ServerResponse, data: unknown, status = 200): void {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'no-store',
   });
   res.end(body);
 }
@@ -212,7 +229,16 @@ function sendXApiError(res: http.ServerResponse, err: unknown): boolean {
 function parseBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let received = 0;
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > MAX_REQUEST_BODY_BYTES) {
+        reject(new BodyTooLargeError());
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
     req.on('error', reject);
   });
@@ -815,6 +841,70 @@ async function handleApi(
   state?: WebRuntimeState,
 ): Promise<void> {
   try {
+    if (req.method === 'GET' && pathname === '/api/system/status') {
+      const integrity = databaseIntegrity(db);
+      sendJson(res, {
+        ok: integrity.ok && !state?.dbReloading,
+        database: integrity,
+        backups: listDbBackups(dbPath).length,
+        sync: {
+          running: Boolean(state?.grabRunning),
+          startedAt: state?.grabStartedAt || null,
+          lastSucceededAt: state?.lastGrabSucceededAt || null,
+          lastError: state?.lastGrabError || null,
+          progress: state?.lastGrabProgress || null,
+        },
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/system/backups') {
+      sendJson(res, { backups: listDbBackups(dbPath) });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/system/backups') {
+      saveDb(db, dbPath);
+      const backup = backupDb(dbPath, 'manual');
+      sendJson(res, { backup }, 201);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/topics') {
+      sendJson(res, { topics: listKnowledgeTopicsFromDb(db) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/items') {
+      const rawLimit = Number(url.searchParams.get('limit')) || 100;
+      sendJson(res, {
+        items: listKnowledgeItemsFromDb(db, {
+          topicId: url.searchParams.get('topicId'),
+          limit: Math.max(1, Math.min(rawLimit, 500)),
+        }),
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/annotations') {
+      sendJson(res, { annotations: listKnowledgeAnnotationsFromDb(db, url.searchParams.get('itemId') || undefined) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/evidence') {
+      const query = (url.searchParams.get('q') || '').trim();
+      if (!query) {
+        sendError(res, 'Query is required.', 400);
+        return;
+      }
+      sendJson(res, {
+        evidence: retrieveKnowledgeEvidenceFromDb(db, query, {
+          topicId: url.searchParams.get('topicId'),
+          limit: Number(url.searchParams.get('limit')) || 30,
+        }),
+      });
+      return;
+    }
 
     // ── Ideas / Quick Notepad API ─────────────────────────────────────────────
     if (req.method === 'GET' && pathname === '/api/ideas') {
@@ -1291,7 +1381,7 @@ async function handleApi(
       const links = bm.links as string[] | undefined;
       const linksHtml = (links || []).map((l: string) => `<li><a href="${esc(l)}">${esc(l)}</a></li>`).join('\n');
       const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bookmark - ${esc(String(bm.authorHandle || 'Unknown'))}</title><style>body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }.author { font-weight: bold; font-size: 1.2rem; }.text { margin: 1rem 0; white-space: pre-wrap; }.meta { color: #666; font-size: 0.9rem; }a { color: #1d9bf0; }</style></head><body><div class="author">${esc(String(bm.authorName || ''))} (@${esc(String(bm.authorHandle || ''))})</div><div class="text">${esc(String(bm.text || ''))}</div>${linksHtml ? `<ul>${linksHtml}</ul>` : ''}<div class="meta"><p>Posted: ${esc(String(bm.postedAt || 'N/A'))}</p><p>Bookmarked: ${esc(String(bm.bookmarkedAt || 'N/A'))}</p><p>URL: <a href="${esc(String(bm.url || ''))}">${esc(String(bm.url || 'N/A'))}</a></p></div></body></html>`;
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
       return;
     }
@@ -1335,7 +1425,7 @@ async function handleApi(
       }
 
     if (req.method === 'POST' && pathname === '/api/grab') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       let clientClosed = false;
       const abortController = new AbortController();
       res.on('close', () => {
@@ -1395,6 +1485,10 @@ async function handleApi(
             send('status', { stage: apiResult.added > 0 ? 'indexing' : 'complete', message: apiResult.added > 0 ? 'Indexing...' : 'Done.' });
             if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state, true);
             send('done', { ...apiResult, provider: 'x-api', stopReason: 'oauth api fallback' });
+            if (state) {
+              state.lastGrabSucceededAt = new Date().toISOString();
+              state.lastGrabError = undefined;
+            }
             res.end();
             return;
           } catch (apiErr) {
@@ -1417,7 +1511,7 @@ async function handleApi(
               : `Could not sync from any installed browser session.\n\n` +
                 `Last browser error: ${browserMessage}\n\n` +
                 `OAuth fallback also failed: ${apiMessage}\n\n` +
-                'Safari is not supported as a cookie source. Fix: log into X in Chrome, Brave, Comet, Edge, Chromium, or Firefox and retry, or run: node bin/ft.mjs auth'
+                'Safari is not supported as a cookie source. Fix: log into X in Chrome, Brave, Comet, Edge, Chromium, or Firefox and retry, or run: xb auth'
             );
             (error as Error & { authUrl?: string }).authUrl = authUrl;
             throw error;
@@ -1430,7 +1524,14 @@ async function handleApi(
           await rebuildIndexAndReload(dbPath, state, syncResult.bookmarkedAtRepaired === 0);
         }
         send('done', syncResult);
-      } catch (err) { send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl }); }
+        if (state) {
+          state.lastGrabSucceededAt = new Date().toISOString();
+          state.lastGrabError = undefined;
+        }
+      } catch (err) {
+        if (state) state.lastGrabError = (err as Error).message;
+        send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl });
+      }
       finally {
         if (state) {
           state.grabRunning = false;
@@ -1442,7 +1543,7 @@ async function handleApi(
     }
 
     if (req.method === 'POST' && pathname === '/api/wiki') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       send('status', { stage: 'compiling', message: 'Building knowledge base...' });
       try {
@@ -2063,7 +2164,6 @@ async function handleApi(
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
       });
       const send = (event: string, data: unknown) =>
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -2090,7 +2190,9 @@ async function handleApi(
     sendError(res, 'Not found', 404);
   } catch (err) {
     const msg = (err as Error).message;
-    if (msg.includes('fts5') || msg.includes('MATCH')) { sendError(res, 'Invalid search query.', 400); } else { console.error('API error:', err); sendError(res, msg, 500); }
+    if (err instanceof BodyTooLargeError) sendError(res, msg, 413);
+    else if (msg.includes('fts5') || msg.includes('MATCH')) sendError(res, 'Invalid search query.', 400);
+    else { console.error('API error:', err); sendError(res, msg, 500); }
   }
 }
 
@@ -2115,7 +2217,12 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
     if (syncResult.added > 0) {
       await rebuildIndexAndReload(dbPath, state, true);
     }
-  } catch (err) { console.error(`  [${ts}] Auto-grab failed:`, (err as Error).message); }
+    state.lastGrabSucceededAt = new Date().toISOString();
+    state.lastGrabError = undefined;
+  } catch (err) {
+    state.lastGrabError = (err as Error).message;
+    console.error(`  [${ts}] Auto-grab failed:`, state.lastGrabError);
+  }
   finally {
     state.grabRunning = false;
     state.grabStartedAt = undefined;
@@ -2130,8 +2237,13 @@ async function autoUpdateXWatchlist(state: { db: Database }, dbPath: string): Pr
 export async function startWebServer(port: number = 3848): Promise<void> {
   loadEnv();
   const auth = getWebAuthConfig();
+  const host = process.env.XTREME_BOOKMARKS_WEB_HOST || process.env.XB_WEB_HOST || '127.0.0.1';
+  const loopbackHosts = new Set(['127.0.0.1', '::1', 'localhost']);
+  if (!loopbackHosts.has(host.toLowerCase()) && !auth.enabled) {
+    throw new Error('Refusing to expose Xtreme Bookmarks beyond this computer without XB_WEB_PASSWORD.');
+  }
   const dbPath = twitterBookmarksIndexPath();
-  if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: ft sync && ft index'); process.exitCode = 1; return; }
+  if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: xb sync && xb index'); process.exitCode = 1; return; }
   const state: WebRuntimeState = { db: await openDb(dbPath) };
   ensureMigrations(state.db);
   initBrainSchema(state.db);
@@ -2153,18 +2265,50 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   });
 
   const webDir = resolveWebDir();
+  const resolvedWebDir = path.resolve(webDir);
+  const configuredOrigins = new Set(
+    (process.env.XB_CORS_ORIGINS || process.env.XTREME_BOOKMARKS_CORS_ORIGINS || '')
+      .split(',').map((origin) => origin.trim()).filter(Boolean),
+  );
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://localhost:${port}`);
+    const requestHost = req.headers.host || `${host}:${port}`;
+    let requestHostname = '';
+    try { requestHostname = new URL(`http://${requestHost}`).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { /* rejected below */ }
+    if (loopbackHosts.has(host.toLowerCase()) && !loopbackHosts.has(requestHostname)) {
+      sendError(res, 'Host is not allowed.', 403);
+      return;
+    }
+    const url = new URL(req.url || '/', `http://${requestHost}`);
     const pathname = url.pathname;
-    
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    const origin = String(req.headers.origin || '');
+    const sameOrigin = origin === `http://${requestHost}` || origin === `https://${requestHost}`;
+    const originAllowed = !origin || sameOrigin || configuredOrigins.has(origin);
+    if (!originAllowed) {
+      sendError(res, 'Origin is not allowed.', 403);
+      return;
+    }
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PUT, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     if (req.method === 'GET' && (pathname === '/healthz' || pathname === '/api/healthz')) {
-      sendJson(res, { ok: true, app: 'xtreme-bookmarks' });
+      const integrity = databaseIntegrity(state.db);
+      sendJson(res, {
+        ok: integrity.ok && !state.dbReloading,
+        app: 'xtreme-bookmarks',
+        database: integrity,
+        sync: {
+          running: Boolean(state.grabRunning),
+          startedAt: state.grabStartedAt || null,
+          lastSucceededAt: state.lastGrabSucceededAt || null,
+          lastError: state.lastGrabError || null,
+        },
+      }, integrity.ok && !state.dbReloading ? 200 : 503);
       return;
     }
 
@@ -2194,8 +2338,10 @@ export async function startWebServer(port: number = 3848): Promise<void> {
       }
 
       // Static
-      const filePath = pathname === '/' ? path.join(webDir, 'index.html') : path.join(webDir, pathname);
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      const requestedPath = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+      const filePath = path.resolve(resolvedWebDir, requestedPath);
+      const isContained = filePath === resolvedWebDir || filePath.startsWith(`${resolvedWebDir}${path.sep}`);
+      if (isContained && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         const ext = path.extname(filePath);
         const headers: Record<string, string> = { 'Content-Type': getMimeType(ext) };
         if (['.html', '.js', '.css'].includes(ext)) headers['Cache-Control'] = 'no-store';
@@ -2216,8 +2362,9 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     } catch (err) { console.error('Request error:', err); sendError(res, 'Internal server error', 500); }
   });
 
-  server.listen(port, () => {
-    const url = `http://localhost:${port}`;
+  server.listen(port, host, () => {
+    const displayHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
+    const url = `http://${displayHost}:${port}`;
     console.log(`\n  Xtreme Bookmarks 2nd Brain Web UI running at ${url}`);
     if (auth.enabled) console.log(`  Web access is password protected for user "${auth.username}".`);
     openBrowser(url);
@@ -2228,7 +2375,22 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   const brainInterval = setInterval(() => {
     runDueBrainAgents().catch((err) => console.error('  Brain agent watch failed:', (err as Error).message));
   }, 60 * 60 * 1000);
-  process.on('SIGINT', () => { clearInterval(grabInterval); if (xFeedInterval) clearInterval(xFeedInterval); clearInterval(brainInterval); stopXBrowserPoller(); state.db.close(); server.close(); process.exit(0); });
-  process.on('SIGTERM', () => { clearInterval(grabInterval); if (xFeedInterval) clearInterval(xFeedInterval); clearInterval(brainInterval); state.db.close(); server.close(); process.exit(0); });
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(grabInterval);
+    if (xFeedInterval) clearInterval(xFeedInterval);
+    clearInterval(brainInterval);
+    stopXBrowserPoller();
+    server.close(() => {
+      try { saveDb(state.db, dbPath); } catch (err) { console.error('  Final database save failed:', (err as Error).message); }
+      state.db.close();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
   return new Promise(() => {});
 }

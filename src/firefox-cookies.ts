@@ -58,7 +58,7 @@ export function ensureFirefoxCookieBackendAvailable(
     'Fix:\n' +
     '  1. Upgrade to Node.js 22.5+ (recommended), or\n' +
     '  2. Install sqlite3 and make sure it is on PATH, or\n' +
-    '  3. Pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+    '  3. Pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
   );
 }
 
@@ -69,7 +69,7 @@ function firefoxBaseDir(): string {
   if (dir) return dir;
   throw new Error(
     `Firefox cookie extraction is not supported on this platform (detected: ${platform()}).\n` +
-    'Pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+    'Pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
   );
 }
 

@@ -19,7 +19,7 @@ test('normalizeBookmarkPage: does not treat tweet creation time as bookmark time
   }, '2026-04-08T00:00:00.000Z');
 
   assert.equal(records.length, 1);
-  assert.equal(records[0].postedAt, undefined);
+  assert.equal(records[0].postedAt, '2026-04-01T12:00:00.000Z');
   assert.equal(records[0].bookmarkedAt, null);
   assert.equal(records[0].syncedAt, '2026-04-08T00:00:00.000Z');
   assert.deepEqual(records[0].links, ['https://example.com']);

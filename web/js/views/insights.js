@@ -36,7 +36,7 @@ export function InsightsView(root) {
             <div class="card-title">Bookmarking over time</div>
             <div class="muted" id="timeline-range" style="font-size:12px"></div>
           </div>
-          <svg id="sparkline" class="sparkline" width="100%" height="80" preserveAspectRatio="none" viewBox="0 0 800 80"></svg>
+          <svg id="sparkline" class="sparkline" role="img" aria-label="Bookmark activity over time" width="100%" height="80" preserveAspectRatio="none" viewBox="0 0 800 80"></svg>
         </div>
       </div>
     </div>
@@ -50,11 +50,11 @@ export function InsightsView(root) {
     c.innerHTML = items.slice(0, 10).map((it) => {
       const label = formatLabel ? formatLabel(it[labelKey]) : String(it[labelKey]);
       return `
-        <div class="bar-row">
+        <button class="bar-row" data-insight-kind="${containerId}" data-insight-value="${escape(String(it[labelKey]))}" title="Open in Library">
           <div class="bar-label" title="${escape(label)}">${escape(label)}</div>
           <div class="bar-track"><div class="bar-fill" style="width:${(it[countKey] / max) * 100}%"></div></div>
           <div class="bar-count">${fmtNumber(it[countKey])}</div>
-        </div>
+        </button>
       `;
     }).join('');
   }
@@ -82,7 +82,12 @@ export function InsightsView(root) {
       <path d="${d}" fill="none" stroke="var(--brand)" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"/>
     `;
 
-    $('#timeline-range', root).textContent = `${timeline[0].period} → ${timeline[timeline.length - 1].period} · ${fmtNumber(timeline.reduce((s, t) => s + t.count, 0))} total`;
+    const first = String(timeline[0].period || '');
+    const last = String(timeline[timeline.length - 1].period || '');
+    const range = first.startsWith('chunk-') ? 'Import order' : `${first} → ${last}`;
+    const total = fmtNumber(timeline.reduce((s, t) => s + t.count, 0));
+    $('#timeline-range', root).textContent = `${range} · ${total} total`;
+    svg.setAttribute('aria-label', `Bookmark activity: ${range}, ${total} bookmarks total`);
   }
 
   async function load() {
@@ -96,8 +101,8 @@ export function InsightsView(root) {
         { label: 'Domains', value: fmtNumber(stats.domainsCount), note: 'distinct sources' },
         {
           label: 'Date range',
-          value: stats.dateRange?.earliest ? fmtDate(stats.dateRange.earliest).split(',')[0] : '—',
-          note: stats.dateRange?.latest ? `→ ${fmtDate(stats.dateRange.latest).split(',')[0]}` : '',
+          value: stats.dateRange?.earliest ? fmtDate(stats.dateRange.earliest) : '—',
+          note: stats.dateRange?.latest ? `→ ${fmtDate(stats.dateRange.latest)}` : '',
         },
       ];
       $('#kpis', root).innerHTML = kpis.map((k) => `
@@ -112,6 +117,10 @@ export function InsightsView(root) {
       renderBars('top-categories', stats.topCategories, 'name', 'count');
       renderBars('top-domains', stats.topDomains, 'name', 'count');
       renderSparkline(timeline.timeline || []);
+      root.querySelectorAll('[data-insight-kind]').forEach((button) => button.addEventListener('click', () => {
+        const map = { 'top-authors': 'author', 'top-categories': 'category', 'top-domains': 'domain' };
+        document.dispatchEvent(new CustomEvent('xb:navigate', { detail: { view: 'library', filter: { [map[button.dataset.insightKind]]: button.dataset.insightValue } } }));
+      }));
     } catch (err) {
       $('#kpis', root).innerHTML = `<div class="placeholder">Failed: ${escape(err.message)}</div>`;
     }

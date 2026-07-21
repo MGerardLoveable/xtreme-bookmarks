@@ -6,6 +6,7 @@ import { extractFirefoxXCookies } from './firefox-cookies.js';
 import { parseTimestampMs } from './date-utils.js';
 import type { BookmarkBackfillState, BookmarkCacheMeta, BookmarkRecord, QuotedTweetSnapshot } from './types.js';
 import { exportBookmarksForSyncSeed, updateQuotedTweets, updateBookmarkText } from './bookmarks-db.js';
+import { unlink } from 'node:fs/promises';
 
 const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const SESSION_COOKIE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -83,6 +84,13 @@ async function saveCachedSessionCookies(cache: CachedSessionCookies): Promise<vo
   cachedSessionCookies = cache;
   ensureDataDir();
   await writeJson(browserSessionCachePath(), cache, { mode: 0o600 });
+}
+
+async function invalidateCachedSessionCookies(): Promise<void> {
+  cachedSessionCookies = null;
+  await unlink(browserSessionCachePath()).catch((err: NodeJS.ErrnoException) => {
+    if (err.code !== 'ENOENT') throw err;
+  });
 }
 
 export const X_PUBLIC_BEARER =
@@ -179,6 +187,11 @@ function parseSnowflake(value?: string | null): bigint | null {
   } catch {
     return null;
   }
+}
+
+function normalizeTimestamp(value?: string | null): string | null {
+  const parsed = parseTimestampMs(value);
+  return parsed == null ? null : new Date(parsed).toISOString();
 }
 
 const MAX_FUTURE_BOOKMARK_SKEW_MS = 5 * 60_000;
@@ -409,7 +422,7 @@ export function convertTweetToRecord(tweetResult: any, now: string): BookmarkRec
         authorName: qtUser?.core?.name ?? qtUser?.legacy?.name,
         authorProfileImageUrl:
           qtUser?.avatar?.image_url ?? qtUser?.legacy?.profile_image_url_https,
-        postedAt: qtLegacy.created_at ?? null,
+        postedAt: normalizeTimestamp(qtLegacy.created_at),
         media: qtMediaEntities.map((m: any) => m.media_url_https ?? m.media_url).filter(Boolean),
         mediaObjects: qtMediaEntities.map((m: any) => ({
           type: m.type,
@@ -436,7 +449,7 @@ export function convertTweetToRecord(tweetResult: any, now: string): BookmarkRec
     authorName,
     authorProfileImageUrl,
     author,
-    postedAt: legacy.created_at ?? null,
+    postedAt: normalizeTimestamp(legacy.created_at),
     bookmarkedAt: null,
     syncedAt: now,
     conversationId: legacy.conversation_id_str,
@@ -465,10 +478,23 @@ export function convertTweetToRecord(tweetResult: any, now: string): BookmarkRec
 
 export function parseBookmarksResponse(json: any, now?: string): PageResult {
   const ts = now ?? new Date().toISOString();
-  const instructions = json?.data?.bookmark_timeline_v2?.timeline?.instructions ?? [];
+  if (Array.isArray(json?.errors) && json.errors.length > 0) {
+    const details = json.errors
+      .map((error: any) => String(error?.message ?? error?.code ?? 'unknown error'))
+      .join('; ');
+    throw new Error(`GraphQL Bookmarks API returned errors: ${details}`);
+  }
+
+  const instructions = json?.data?.bookmark_timeline_v2?.timeline?.instructions;
+  if (!Array.isArray(instructions)) {
+    throw new Error('GraphQL Bookmarks API response changed: bookmark timeline instructions are missing.');
+  }
   const entries: any[] = [];
   for (const inst of instructions) {
-    if (inst.type === 'TimelineAddEntries' && Array.isArray(inst.entries)) {
+    if (inst?.type === 'TimelineAddEntries') {
+      if (!Array.isArray(inst.entries)) {
+        throw new Error('GraphQL Bookmarks API response changed: timeline entries are not an array.');
+      }
       entries.push(...inst.entries);
     }
   }
@@ -568,17 +594,24 @@ async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHead
     }
 
     if (!response.ok) {
-      const text = await response.text();
+      const authenticationFailed = response.status === 401 || response.status === 403;
+      if (authenticationFailed) await invalidateCachedSessionCookies();
+      const text = authenticationFailed ? '' : await response.text();
       throw new Error(
         `GraphQL Bookmarks API returned ${response.status}.\n` +
-          `Response: ${text.slice(0, 300)}\n\n` +
-          (response.status === 401 || response.status === 403
+          (text ? `Response: ${text.slice(0, 300)}\n\n` : '') +
+          (authenticationFailed
             ? 'Fix: Your X session may have expired. Open your browser, go to https://x.com, and make sure you are logged in. Then retry.'
             : 'This may be a temporary issue. Try again in a few minutes.')
       );
     }
 
-    const json = await response.json();
+    let json: any;
+    try {
+      json = await response.json();
+    } catch {
+      throw new Error('GraphQL Bookmarks API returned invalid JSON. No bookmark data was changed.');
+    }
     return parseBookmarksResponse(json);
   }
 
@@ -914,11 +947,23 @@ interface SyndicationResult {
 
 async function fetchTweetViaSyndication(tweetId: string): Promise<SyndicationResult> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(`${SYNDICATION_URL}?id=${tweetId}&token=x`, {
-      headers: {
-        'user-agent': CHROME_UA,
-      },
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GRAPHQL_FETCH_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(`${SYNDICATION_URL}?id=${tweetId}&token=x`, {
+        headers: {
+          'user-agent': CHROME_UA,
+        },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (attempt === 3) return { snapshot: null, status: 'error' };
+      await sleep(1000 * (attempt + 1));
+      continue;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (response.ok) {
       const data = await response.json() as any;
@@ -933,7 +978,7 @@ async function fetchTweetViaSyndication(tweetId: string): Promise<SyndicationRes
           authorHandle: handle,
           authorName: data.user?.name,
           authorProfileImageUrl: data.user?.profile_image_url_https,
-          postedAt: data.created_at ?? null,
+          postedAt: normalizeTimestamp(data.created_at),
           media: mediaEntities.map((m: any) => m.media_url_https ?? m.media_url).filter(Boolean),
           mediaObjects: mediaEntities.map((m: any) => ({
             type: m.type,

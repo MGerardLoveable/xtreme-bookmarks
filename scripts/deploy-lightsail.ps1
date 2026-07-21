@@ -183,7 +183,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/xtreme-bookmarks
 EnvironmentFile=/etc/xtreme-bookmarks.env
-ExecStart=/usr/bin/node /opt/xtreme-bookmarks/bin/ft.mjs web --port 3847
+ExecStart=/usr/bin/node /opt/xtreme-bookmarks/bin/xb.mjs web --port 3847
 Restart=always
 RestartSec=5
 

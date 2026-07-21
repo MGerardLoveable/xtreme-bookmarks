@@ -73,7 +73,7 @@ test('buildIndex refreshes existing rows without dropping classifications', asyn
     const bookmark = await getBookmarkById('1');
     assert.ok(bookmark);
     assert.equal(bookmark.text, 'Machine learning note updated');
-    assert.equal(bookmark.bookmarkedAt, '2026-04-02T00:00:00Z');
+    assert.equal(bookmark.bookmarkedAt, '2026-04-02T00:00:00.000Z');
     assert.deepEqual(bookmark.categories, ['ai', 'ml']);
     assert.equal(bookmark.primaryCategory, 'research');
     assert.deepEqual(bookmark.domains, ['example.com']);
@@ -104,6 +104,57 @@ test('updateIndexIncrementally adds new rows without rebuilding existing rows', 
     const repeated = await updateIndexIncrementally();
     assert.equal(repeated.recordCount, 4);
     assert.equal(repeated.newRecords, 0);
+  });
+});
+
+test('updateIndexIncrementally refreshes changed rows and preserves classifications', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    const dbPath = twitterBookmarksIndexPath();
+    const db = await openDb(dbPath);
+    try {
+      db.run('UPDATE bookmarks SET categories = ?, primary_category = ? WHERE id = ?', ['ai,tools', 'tools', '1']);
+      saveDb(db, dbPath);
+    } finally {
+      db.close();
+    }
+
+    const updated = FIXTURES.map((record) => record.id === '1'
+      ? { ...record, text: 'A refreshed resilience handbook', sortIndex: '2031520476165046272' }
+      : record);
+    await writeFile(
+      path.join(process.env.FT_DATA_DIR!, 'bookmarks.jsonl'),
+      updated.map((record) => JSON.stringify(record)).join('\n') + '\n',
+    );
+
+    const result = await updateIndexIncrementally();
+    assert.equal(result.newRecords, 0);
+    assert.equal((await searchBookmarks({ query: 'resilience handbook' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'transforming healthcare' })).length, 0);
+    const bookmark = await getBookmarkById('1');
+    assert.deepEqual(bookmark?.categories, ['ai', 'tools']);
+    assert.equal(bookmark?.primaryCategory, 'tools');
+
+    const check = await openDb(dbPath);
+    try {
+      assert.equal(check.exec('SELECT sort_index FROM bookmarks WHERE id = ?', ['1'])[0]?.values[0]?.[0], '2031520476165046272');
+    } finally {
+      check.close();
+    }
+  });
+});
+
+test('only an explicit forced rebuild removes records absent from the archive', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    await writeFile(
+      path.join(process.env.FT_DATA_DIR!, 'bookmarks.jsonl'),
+      FIXTURES.slice(0, 2).map((record) => JSON.stringify(record)).join('\n') + '\n',
+    );
+
+    assert.equal((await buildIndex()).recordCount, 3);
+    assert.equal((await buildIndex({ force: true })).recordCount, 2);
+    assert.equal(await getBookmarkById('3'), null);
   });
 });
 

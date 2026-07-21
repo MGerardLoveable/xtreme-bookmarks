@@ -35,6 +35,7 @@ import { dataDir, ensureDataDir, isFirstRun, twitterBookmarksIndexPath, twitterB
 import { PromptCancelledError, promptText } from './prompt.js';
 import { skillWithFrontmatter, installSkill, uninstallSkill } from './skill.js';
 import { startWebServer } from './web-server.js';
+import { backupDb, databaseIntegrity, listDbBackups, openDb, restoreDbBackup } from './db.js';
 import {
   addBrainRepo,
   createBrainSpace,
@@ -116,7 +117,7 @@ function warnIfEmpty(totalBookmarks: number): void {
   console.log(`    \u2022 The browser needs to be fully quit first (Cmd+Q / close all windows)`);
   console.log(`    \u2022 Keychain/keyring access was denied`);
   console.log(`    \u2022 You may be logged into a different profile than the one with X/Twitter`);
-  console.log(`    \u2022 Try: ft sync --cookies <ct0> <auth_token>  (paste from DevTools)\n`);
+  console.log(`    \u2022 Try: xb sync --cookies <ct0> <auth_token>  (paste from DevTools)\n`);
 }
 
 // ── Update checker ────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ async function checkForUpdate(): Promise<void> {
     if (needsFetch) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch('https://registry.npmjs.org/fieldtheory/latest', {
+      const res = await fetch('https://registry.npmjs.org/xtreme-bookmarks/latest', {
         signal: controller.signal,
         headers: { accept: 'application/json' },
       });
@@ -179,7 +180,7 @@ function showCachedUpdateNotice(): void {
     const latest = fs.readFileSync(cacheFile, 'utf-8').trim();
     const local = getLocalVersion();
     if (latest && compareVersions(latest, local) > 0) {
-      console.log(`\n  \u2728 Update available: ${local} \u2192 ${latest}  \u2014  npm update -g fieldtheory`);
+      console.log(`\n  \u2728 Update available: ${local} \u2192 ${latest}  \u2014  npm update -g xtreme-bookmarks`);
     }
   } catch { /* no cache yet, skip */ }
 }
@@ -188,10 +189,10 @@ function showCachedUpdateNotice(): void {
 
 const WHATS_NEW: Record<string, string[]> = {
   '1.2.2': [
-    'ft sync --gaps \u2014 backfill missing quoted tweets and expand truncated articles',
+    'xb sync --gaps \u2014 backfill missing quoted tweets and expand truncated articles',
     'Quoted tweet content and full article text now captured automatically during sync',
     'Bookmark date (when you bookmarked, not just when it was posted) now tracked',
-    'ft sync --rebuild replaces --full',
+    'xb sync --rebuild replaces --full',
     'Update notifications when a new version is available',
   ],
 };
@@ -276,16 +277,16 @@ export async function showDashboard(): Promise<void> {
     }
 
     console.log(`
-  \x1b[2mSync now:\x1b[0m     ft sync
-  \x1b[2mSearch:\x1b[0m       ft search "query"
-  \x1b[2mExplore:\x1b[0m      ft viz
-  \x1b[2mAll commands:\x1b[0m  ft --help
+  \x1b[2mSync now:\x1b[0m     xb sync
+  \x1b[2mSearch:\x1b[0m       xb search "query"
+  \x1b[2mExplore:\x1b[0m      xb viz
+  \x1b[2mAll commands:\x1b[0m  xb --help
 `);
   } catch {
     console.log(`
   Data: ${dataDir()}
 
-  Run: ft sync
+  Run: xb sync
 `);
   }
 }
@@ -325,7 +326,7 @@ function requireData(): boolean {
   Get started:
 
     1. Open your browser and log into x.com
-    2. Run: ft sync
+    2. Run: xb sync
 `);
     process.exitCode = 1;
     return false;
@@ -340,7 +341,7 @@ function requireIndex(): boolean {
     console.log(`
   Search index not built yet.
 
-  Run: ft index
+  Run: xb index
 `);
     process.exitCode = 1;
     return false;
@@ -625,16 +626,16 @@ export function buildCli() {
 
         if (firstRun) {
           console.log(`\n  Bookmarks synced and categorized. Next steps:\n`);
-          console.log(`        ft classify              Upgrade to LLM classification (better accuracy)`);
-          console.log(`        ft wiki                  Build your AI knowledge base from bookmarks`);
+          console.log(`        xb classify              Upgrade to LLM classification (better accuracy)`);
+          console.log(`        xb wiki                  Build your AI knowledge base from bookmarks`);
           console.log(`\n  Explore:`);
-          console.log(`        ft search "machine learning"`);
-          console.log(`        ft viz`);
-          console.log(`        ft categories`);
+          console.log(`        xb search "machine learning"`);
+          console.log(`        xb viz`);
+          console.log(`        xb categories`);
           console.log(`\n  You can also just tell Claude to use the ft CLI to search and`);
           console.log(`  explore your bookmarks. It already knows how.\n`);
         } else if (newCount > 0) {
-          console.log(`  Tip: run \`ft wiki\` to rebuild your knowledge base with the new bookmarks.\n`);
+          console.log(`  Tip: run \`xb wiki\` to rebuild your knowledge base with the new bookmarks.\n`);
         }
 
       } catch (err) {
@@ -646,13 +647,13 @@ export function buildCli() {
   To sync your bookmarks:
 
     1. Open your browser and log into x.com
-    2. Run: ft sync
+    2. Run: xb sync
 
   Options:
-    ft sync --browser brave           Use a specific browser
-    ft sync --browser firefox          Use Firefox
-    ft sync --cookies <ct0> <auth>     Pass cookies directly
-    ft sync --chrome-profile-directory "Profile 1"
+    xb sync --browser brave           Use a specific browser
+    xb sync --browser firefox          Use Firefox
+    xb sync --cookies <ct0> <auth>     Pass cookies directly
+    xb sync --chrome-profile-directory "Profile 1"
 `);
         } else {
           console.error(`\n  Error: ${msg}\n`);
@@ -876,7 +877,7 @@ export function buildCli() {
         return;
       }
 
-      // Direct set: ft model grok
+      // Direct set: xb model grok
       if (engineArg) {
         const aliases: Record<string, string> = {
           'supergrok': 'grok',
@@ -905,7 +906,7 @@ export function buildCli() {
 
       if (!process.stdin.isTTY) {
         if (prefs.defaultEngine) console.log(`  Current default: ${prefs.defaultEngine}`);
-        console.log('  Set with: ft model <engine>');
+        console.log('  Set with: xb model <engine>');
         return;
       }
 
@@ -936,7 +937,7 @@ export function buildCli() {
       if (!requireIndex()) return;
       const counts = await getCategoryCounts();
       if (Object.keys(counts).length === 0) {
-        console.log('  No categories found. Run: ft classify');
+        console.log('  No categories found. Run: xb classify');
         return;
       }
       const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -955,7 +956,7 @@ export function buildCli() {
       if (!requireIndex()) return;
       const counts = await getDomainCounts();
       if (Object.keys(counts).length === 0) {
-        console.log('  No domains found. Run: ft classify-domains');
+        console.log('  No domains found. Run: xb classify-domains');
         return;
       }
       const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -1024,7 +1025,7 @@ export function buildCli() {
       if (!requireIndex()) return;
       const results = await sampleByCategory(category, Number(options.limit) || 10);
       if (results.length === 0) {
-        console.log(`  No bookmarks found with category "${category}". Run: ft classify`);
+        console.log(`  No bookmarks found with category "${category}". Run: xb classify`);
         return;
       }
       for (const r of results) {
@@ -1052,7 +1053,7 @@ export function buildCli() {
       console.log(JSON.stringify(result, null, 2));
     }));
 
-  // ── ft md ── Export bookmarks as markdown files ────────────────────────
+  // ── xb md ── Export bookmarks as markdown files ────────────────────────
 
   program
     .command('md')
@@ -1076,7 +1077,7 @@ export function buildCli() {
       console.log(`\n  Open in your markdown viewer:\n  ${mdDir()}`);
     }));
 
-  // ── ft wiki ── Compile Karpathy-style knowledge base ────────────────────
+  // ── xb wiki ── Compile Karpathy-style knowledge base ────────────────────
 
   program
     .command('wiki')
@@ -1099,12 +1100,12 @@ export function buildCli() {
       const failed = result.pagesFailed > 0 ? ` failed=${result.pagesFailed}` : '';
       console.log(`Done (${elapsed}s) — engine=${result.engine} created=${result.pagesCreated} updated=${result.pagesUpdated} skipped=${result.pagesSkipped}${failed} total=${result.totalPages}`);
       if (result.pagesFailed > 0) {
-        console.log(`\n  ${result.pagesFailed} page(s) failed — re-run ft wiki to retry them.`);
+        console.log(`\n  ${result.pagesFailed} page(s) failed — re-run xb wiki to retry them.`);
       }
       console.log(`\n  Open in your markdown viewer:\n  ${mdDir()}`);
     }));
 
-  // ── ft ask ── Q&A against the knowledge base ──────────────────────────
+  // ── xb ask ── Q&A against the knowledge base ──────────────────────────
 
   program
     .command('ask')
@@ -1219,6 +1220,58 @@ export function buildCli() {
       if (options.json) {
         console.log(exportHealthReportAsJson(report));
       }
+    }));
+
+  // ── backup ── Durable local recovery ────────────────────────────────
+
+  program
+    .command('backup')
+    .description('Create a private backup of the bookmark database')
+    .action(safe(async () => {
+      const dbPath = twitterBookmarksIndexPath();
+      if (!fs.existsSync(dbPath)) {
+        throw new Error('Bookmark database not found. Run xb sync && xb index first.');
+      }
+      const db = await openDb(dbPath);
+      try {
+        const integrity = databaseIntegrity(db);
+        if (!integrity.ok) throw new Error(`Database integrity check failed: ${integrity.message}`);
+      } finally {
+        db.close();
+      }
+      const backup = backupDb(dbPath, 'manual');
+      console.log(`  Backup created: ${backup?.path}`);
+    }));
+
+  const backups = program
+    .command('backups')
+    .description('List and restore bookmark database backups');
+
+  backups
+    .command('list', { isDefault: true })
+    .description('List available database backups')
+    .action(() => {
+      const rows = listDbBackups(twitterBookmarksIndexPath());
+      if (rows.length === 0) {
+        console.log('  No database backups yet. Run: xb backup');
+        return;
+      }
+      for (const row of rows) {
+        console.log(`  ${row.name}  ${new Date(row.createdAt).toLocaleString()}  ${row.size.toLocaleString()} bytes`);
+      }
+    });
+
+  backups
+    .command('restore')
+    .description('Restore a named database backup (stop the web server first)')
+    .argument('<name>', 'Backup filename from xb backups list')
+    .option('--yes', 'Confirm the restore without prompting')
+    .action(safe(async (name: string, options) => {
+      if (!options.yes) {
+        throw new Error('Restore replaces the current database. Re-run with --yes after stopping the web server.');
+      }
+      restoreDbBackup(twitterBookmarksIndexPath(), name);
+      console.log(`  Restored database backup: ${name}`);
     }));
 
   // ── brain ── Main Brain + Sub-Brain spaces ────────────────────────────
@@ -1361,7 +1414,7 @@ export function buildCli() {
     .action(safe(async () => {
       const results = await installSkill();
       if (results.length === 0) {
-        console.log('  No agents detected. Use `ft skill show` to copy manually.');
+        console.log('  No agents detected. Use `xb skill show` to copy manually.');
         return;
       }
       const labels: Record<string, string> = {
@@ -1403,14 +1456,14 @@ export function buildCli() {
   const bookmarksAlias = program.command('bookmarks').description('(alias) Bookmark commands').helpOption(false);
   for (const cmd of ['sync', 'search', 'list', 'show', 'stats', 'viz', 'classify', 'classify-domains',
     'categories', 'domains', 'model', 'index', 'auth', 'status', 'path', 'sample', 'fetch-media']) {
-    bookmarksAlias.command(cmd).description(`Alias for: ft ${cmd}`).allowUnknownOption(true)
+    bookmarksAlias.command(cmd).description(`Alias for: xb ${cmd}`).allowUnknownOption(true)
       .action(async () => {
-        const args = ['node', 'ft', cmd, ...process.argv.slice(4)];
+        const args = ['node', 'xb', cmd, ...process.argv.slice(4)];
         await program.parseAsync(args);
       });
   }
-  bookmarksAlias.command('enable').description('Alias for: ft sync').action(async () => {
-    const args = ['node', 'ft', 'sync', ...process.argv.slice(4)];
+  bookmarksAlias.command('enable').description('Alias for: xb sync').action(async () => {
+    const args = ['node', 'xb', 'sync', ...process.argv.slice(4)];
     await program.parseAsync(args);
   });
 

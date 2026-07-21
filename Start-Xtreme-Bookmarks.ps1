@@ -1,11 +1,17 @@
+param(
+  [int]$Port = 3848
+)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Port = 3847
 $Url = "http://localhost:$Port/"
 $StatsUrl = "http://localhost:$Port/api/stats"
-$OutLog = Join-Path $ProjectDir "web-server-3847.out.log"
-$ErrLog = Join-Path $ProjectDir "web-server-3847.err.log"
+$LogDir = Join-Path $env:LOCALAPPDATA "Xtreme Bookmarks\logs"
+$Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$OutLog = Join-Path $LogDir "web-server-$Port-$Timestamp.out.log"
+$ErrLog = Join-Path $LogDir "web-server-$Port-$Timestamp.err.log"
+$Launcher = Join-Path $ProjectDir "bin\xb.mjs"
 
 function Test-XtremeBookmarks {
   try {
@@ -23,19 +29,27 @@ function Test-XtremeBookmarks {
 
 if (-not (Test-XtremeBookmarks)) {
   $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-  foreach ($listener in $listeners) {
-    try {
-      $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)"
-      if ($proc.CommandLine -match "xtreme-bookmarks" -or $proc.CommandLine -match "bin/ft\.mjs web") {
-        Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
-      }
-    } catch {}
+  if ($listeners) {
+    throw "Port $Port is already in use by another process. Start with a different port: .\Start-Xtreme-Bookmarks.ps1 -Port 3849"
   }
 
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    throw "Node.js 20 or newer is required and was not found on PATH."
+  }
+  if (-not (Test-Path $Launcher)) {
+    throw "Xtreme Bookmarks launcher was not found: $Launcher"
+  }
+  if (-not (Test-Path (Join-Path $ProjectDir "dist\cli.js"))) {
+    Write-Host "Building Xtreme Bookmarks..."
+    & npm run build --prefix $ProjectDir
+    if ($LASTEXITCODE -ne 0) { throw "Xtreme Bookmarks build failed." }
+  }
+
+  New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   $env:XTREME_BOOKMARKS_NO_OPEN = "1"
   Start-Process `
     -FilePath "node" `
-    -ArgumentList @("bin/ft.mjs", "web", "--port", "$Port") `
+    -ArgumentList @($Launcher, "web", "--port", "$Port") `
     -WorkingDirectory $ProjectDir `
     -RedirectStandardOutput $OutLog `
     -RedirectStandardError $ErrLog `

@@ -6,8 +6,9 @@ import { twitterBookmarksCachePath, twitterBookmarksIndexPath } from './paths.js
 import type { BookmarkRecord, QuotedTweetSnapshot } from './types.js';
 import { classifyCorpus, formatClassificationSummary } from './bookmark-classify.js';
 import type { ClassificationSummary } from './bookmark-classify.js';
+import { createHash } from 'node:crypto';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 export interface SearchResult {
   id: string;
@@ -110,6 +111,11 @@ function chronologicalDateRange(values: unknown[]): { earliest: string | null; l
   return { earliest, latest };
 }
 
+function normalizeTimestamp(value?: string | null): string | null {
+  const parsed = parseTimestampMs(value);
+  return parsed == null ? null : new Date(parsed).toISOString();
+}
+
 function mapTimelineRow(row: unknown[]): BookmarkTimelineItem {
   return {
     id: row[0] as string,
@@ -185,6 +191,7 @@ function bookmarkSortClause(direction: 'asc' | 'desc' = 'desc'): string {
   const normalized = direction === 'asc' ? 'ASC' : 'DESC';
   return `
     ORDER BY
+      CASE WHEN b.sort_index GLOB '[0-9]*' THEN CAST(b.sort_index AS INTEGER) ELSE 0 END ${normalized},
       CASE
         WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at
         WHEN b.posted_at GLOB '____-__-__*' THEN b.posted_at
@@ -234,7 +241,9 @@ function initSchema(db: Database): void {
     memory_tier TEXT DEFAULT 'working',
     confidence_score REAL DEFAULT 1.0,
     superseded_by TEXT,
-    in_wiki INTEGER DEFAULT 0
+    in_wiki INTEGER DEFAULT 0,
+    sort_index TEXT,
+    source_hash TEXT
   )`);
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_author ON bookmarks(author_handle)`);
@@ -300,6 +309,13 @@ export function ensureMigrations(db: Database): void {
       try { db.run('ALTER TABLE bookmarks ADD COLUMN quoted_text TEXT'); } catch { /* already exists */ }
     }
   }
+  if (version < 8) {
+    const tableExists = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='bookmarks'");
+    if (tableExists.length && tableExists[0].values.length > 0) {
+      try { db.run('ALTER TABLE bookmarks ADD COLUMN sort_index TEXT'); } catch { /* already exists */ }
+      try { db.run('ALTER TABLE bookmarks ADD COLUMN source_hash TEXT'); } catch { /* already exists */ }
+    }
+  }
   if (version < SCHEMA_VERSION) {
     db.run(`REPLACE INTO meta VALUES ('schema_version', '${SCHEMA_VERSION}')`);
   }
@@ -327,6 +343,9 @@ function insertRecord(db: Database, r: BookmarkRecord, preserved?: PreservedBook
     ? JSON.stringify(r.mediaObjects)
     : (r.media?.length ? JSON.stringify(r.media) : null);
   const mediaCount = r.mediaObjects?.length ?? r.media?.length ?? 0;
+  const postedAt = normalizeTimestamp(r.postedAt);
+  const bookmarkedAt = normalizeTimestamp(r.bookmarkedAt);
+  const sourceHash = bookmarkSourceHash({ ...r, postedAt, bookmarkedAt });
 
   db.run(
     `INSERT OR REPLACE INTO bookmarks (
@@ -366,8 +385,10 @@ function insertRecord(db: Database, r: BookmarkRecord, preserved?: PreservedBook
       memory_tier,
       confidence_score,
       superseded_by,
-      in_wiki
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      in_wiki,
+      sort_index,
+      source_hash
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       r.id,
       r.tweetId,
@@ -376,8 +397,8 @@ function insertRecord(db: Database, r: BookmarkRecord, preserved?: PreservedBook
       r.authorHandle ?? null,
       r.authorName ?? null,
       r.authorProfileImageUrl ?? null,
-      r.postedAt ?? null,
-      r.bookmarkedAt ?? null,
+      postedAt,
+      bookmarkedAt,
       r.syncedAt,
       r.conversationId ?? null,
       r.inReplyToStatusId ?? null,
@@ -406,8 +427,38 @@ function insertRecord(db: Database, r: BookmarkRecord, preserved?: PreservedBook
       preserved?.confidenceScore ?? 1.0,
       null, // superseded_by
       preserved?.inWiki ?? 0,
+      r.sortIndex ?? null,
+      sourceHash,
     ]
   );
+}
+
+function bookmarkSourceHash(record: BookmarkRecord): string {
+  const source = {
+    id: record.id,
+    tweetId: record.tweetId,
+    url: record.url,
+    text: record.text,
+    authorHandle: record.authorHandle ?? null,
+    authorName: record.authorName ?? null,
+    authorProfileImageUrl: record.authorProfileImageUrl ?? null,
+    postedAt: normalizeTimestamp(record.postedAt),
+    bookmarkedAt: normalizeTimestamp(record.bookmarkedAt),
+    sortIndex: record.sortIndex ?? null,
+    syncedAt: normalizeTimestamp(record.syncedAt) ?? record.syncedAt,
+    conversationId: record.conversationId ?? null,
+    inReplyToStatusId: record.inReplyToStatusId ?? null,
+    quotedStatusId: record.quotedStatusId ?? null,
+    language: record.language ?? null,
+    engagement: record.engagement ?? null,
+    media: record.media ?? null,
+    mediaObjects: record.mediaObjects ?? null,
+    links: record.links ?? null,
+    tags: record.tags ?? null,
+    ingestedVia: record.ingestedVia ?? null,
+    quotedTweet: record.quotedTweet ?? null,
+  };
+  return createHash('sha256').update(JSON.stringify(source)).digest('hex');
 }
 
 export async function buildIndex(options?: { force?: boolean }): Promise<{ dbPath: string; recordCount: number; newRecords: number }> {
@@ -482,17 +533,44 @@ export async function updateIndexIncrementally(): Promise<{ dbPath: string; reco
     ensureMigrations(db);
     initSchema(db);
 
-    const existingRows = db.exec('SELECT id FROM bookmarks');
-    const existingIds = new Set(
-      (existingRows[0]?.values ?? []).map((row) => String(row[0])),
+    const existingRows = db.exec(
+      `SELECT id, source_hash, categories, primary_category, github_urls, domains, primary_domain,
+              quoted_tweet_json, memory_tier, confidence_score, in_wiki, rowid
+       FROM bookmarks`
+    );
+    const existingById = new Map(
+      (existingRows[0]?.values ?? []).map((row) => [String(row[0]), {
+        sourceHash: (row[1] as string) ?? null,
+        preserved: {
+          categories: (row[2] as string) ?? null,
+          primaryCategory: (row[3] as string) ?? null,
+          githubUrls: (row[4] as string) ?? null,
+          domains: (row[5] as string) ?? null,
+          primaryDomain: (row[6] as string) ?? null,
+          quotedTweetJson: (row[7] as string) ?? null,
+          memoryTier: (row[8] as string) ?? null,
+          confidenceScore: (row[9] as number) ?? null,
+          inWiki: (row[10] as number) ?? 0,
+        } satisfies PreservedBookmarkFields,
+        rowid: Number(row[11]),
+      }]),
     );
     let newRecords = 0;
+    let changedRecords = 0;
 
     db.run('BEGIN TRANSACTION');
     try {
       for await (const record of iterateJsonLines<BookmarkRecord>(cachePath)) {
-        if (existingIds.has(record.id)) continue;
-        insertRecord(db, record);
+        const existing = existingById.get(record.id);
+        const nextHash = bookmarkSourceHash(record);
+        if (existing?.sourceHash === nextHash) continue;
+        if (existing) {
+          db.run('DELETE FROM bookmarks_fts WHERE rowid = ?', [existing.rowid]);
+          changedRecords += 1;
+        } else {
+          newRecords += 1;
+        }
+        insertRecord(db, record, existing?.preserved);
         const row = db.exec(
           'SELECT rowid, text, author_handle, author_name FROM bookmarks WHERE id = ?',
           [record.id],
@@ -503,8 +581,6 @@ export async function updateIndexIncrementally(): Promise<{ dbPath: string; reco
             [row[0], row[1], row[2], row[3]],
           );
         }
-        existingIds.add(record.id);
-        newRecords += 1;
       }
       db.run('COMMIT');
     } catch (err) {
@@ -512,7 +588,7 @@ export async function updateIndexIncrementally(): Promise<{ dbPath: string; reco
       throw err;
     }
 
-    if (newRecords > 0) saveDb(db, dbPath);
+    if (newRecords > 0 || changedRecords > 0) saveDb(db, dbPath);
     const recordCount = Number(db.exec('SELECT COUNT(*) FROM bookmarks')[0]?.values[0]?.[0] ?? 0);
     return { dbPath, recordCount, newRecords };
   } finally {
@@ -718,7 +794,8 @@ export async function exportBookmarksForSyncSeed(): Promise<BookmarkRecord[]> {
         b.quote_count,
         b.bookmark_count,
         b.view_count,
-        b.links_json
+        b.links_json,
+        b.sort_index
       FROM bookmarks b
       ${bookmarkSortClause('desc')}
     `;
@@ -749,6 +826,7 @@ export async function exportBookmarksForSyncSeed(): Promise<BookmarkRecord[]> {
         viewCount: row[19] as number | undefined,
       },
       links: parseJsonArray(row[20]),
+      sortIndex: (row[21] as string) ?? null,
       tags: [],
       ingestedVia: 'graphql',
     }));

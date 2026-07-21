@@ -94,7 +94,7 @@ function renderTree(query = '') {
   if (!filtered.length) {
     $('#wiki-tree', rootEl).innerHTML = q
       ? `<div class="placeholder" style="font-size:12px">No matches for "${escape(q)}"</div>`
-      : `<div class="empty-state" style="padding:16px"><p>No wiki pages yet. Run <code>ft wiki</code> to generate.</p></div>`;
+      : `<div class="empty-state" style="padding:16px"><p>No wiki pages yet. Run <code>xb wiki</code> to generate.</p></div>`;
     return;
   }
 

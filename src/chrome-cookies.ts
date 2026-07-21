@@ -35,7 +35,7 @@ function getMacOSKey(browser: BrowserDef): Buffer {
   throw new Error(
     `Could not read ${browser.displayName} Safe Storage password from macOS Keychain.\n` +
     'Fix: open the browser profile logged into X, then retry.\n' +
-    'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+    'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
   );
 }
 
@@ -190,7 +190,7 @@ export function runWindowsDpapi(
       `${options.failureLabel}\n` +
       'Could not find a trusted Windows PowerShell binary for DPAPI decryption.\n' +
       'Expected Windows PowerShell under %SystemRoot%\\System32 or %SystemRoot%\\Sysnative.\n' +
-      'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+      'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
     );
   }
 
@@ -198,7 +198,7 @@ export function runWindowsDpapi(
     `${options.failureLabel}\n` +
     (lastProblem ? `${lastProblem}\n` : '') +
     'Try running as the same Windows user that owns the browser profile.\n' +
-    'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+    'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
   );
 }
 
@@ -208,7 +208,7 @@ function getWindowsKey(chromeUserDataDir: string, browser: BrowserDef): Buffer {
     throw new Error(
       `${browser.displayName} "Local State" not found at: ${localStatePath}\n` +
       'Make sure the browser is installed and has been opened at least once.\n' +
-      'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+      'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
     );
   }
 
@@ -223,7 +223,7 @@ function getWindowsKey(chromeUserDataDir: string, browser: BrowserDef): Buffer {
   if (!encryptedKeyB64) {
     throw new Error(
       'Could not find os_crypt.encrypted_key in Local State.\n' +
-      'Pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+      'Pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
     );
   }
 
@@ -284,11 +284,11 @@ function sanitizeCookieValue(name: string, value: string, browser: BrowserDef): 
     throw new Error(
       `Cookie ${name} was empty after decryption.\n\n` +
       'This usually happens when the browser is open. Try:\n' +
-      `  1. Close ${browser.displayName} completely and run ft sync again\n` +
+      `  1. Close ${browser.displayName} completely and run xb sync again\n` +
       '  2. Try a different profile:\n' +
-      '     ft sync --chrome-profile-directory "Profile 1"\n' +
+      '     xb sync --chrome-profile-directory "Profile 1"\n' +
       '  3. Or pass cookies manually:\n' +
-      '     ft sync --cookies <ct0> <auth_token>'
+      '     xb sync --cookies <ct0> <auth_token>'
     );
   }
   if (!/^[\x21-\x7E]+$/.test(cleaned)) {
@@ -296,11 +296,11 @@ function sanitizeCookieValue(name: string, value: string, browser: BrowserDef): 
       `Could not decrypt the ${name} cookie.\n\n` +
       'This usually happens when the browser is open or the wrong profile is selected.\n\n' +
       'Try:\n' +
-      `  1. Close ${browser.displayName} completely and run ft sync again\n` +
+      `  1. Close ${browser.displayName} completely and run xb sync again\n` +
       '  2. Try a different profile:\n' +
-      '     ft sync --chrome-profile-directory "Profile 1"\n' +
+      '     xb sync --chrome-profile-directory "Profile 1"\n' +
       '  3. Or pass cookies manually:\n' +
-      '     ft sync --cookies <ct0> <auth_token>'
+      '     xb sync --cookies <ct0> <auth_token>'
     );
   }
   return cleaned;
@@ -325,7 +325,7 @@ export function decryptCookieValue(
         'Fix:\n' +
         '  1. Install libsecret-tools:  sudo apt-get install libsecret-tools\n' +
         '  2. Check the entry exists:   secret-tool lookup application chrome\n' +
-        '  3. Or pass cookies manually: ft sync --cookies <ct0> <auth_token>'
+        '  3. Or pass cookies manually: xb sync --cookies <ct0> <auth_token>'
       );
     }
 
@@ -451,7 +451,7 @@ function queryCookies(dbPath: string, domain: string, names: string[], browser: 
       `${browser.displayName} Cookies database not found at: ${dbPath}\n` +
       'Fix: Make sure the browser is installed and has been opened at least once.\n' +
       'If you use a non-default profile, pass --chrome-profile-directory <name>.\n' +
-      'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+      'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
     );
   }
 
@@ -460,7 +460,7 @@ function queryCookies(dbPath: string, domain: string, names: string[], browser: 
     if (!sqlite) {
       throw new Error(
         'node:sqlite is unavailable. Upgrade to Node.js 22.5+.\n' +
-        'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+        'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
       );
     }
     const db = new sqlite.DatabaseSync(p, { readOnly: true });
@@ -494,7 +494,7 @@ function queryCookies(dbPath: string, domain: string, names: string[], browser: 
         `Path: ${dbPath}\n` +
         `Error: ${e2.message}\n` +
         `Fix: If ${browser.displayName} still blocks the cookie snapshot, close it and retry.\n` +
-        'Or pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+        'Or pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
       );
     } finally {
       try { unlinkSync(tmpDb); } catch {}
@@ -537,7 +537,7 @@ export function extractChromeXCookies(
   } else {
     throw new Error(
       `Automatic cookie extraction is not supported on ${os}.\n` +
-      'Pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+      'Pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
     );
   }
 
@@ -576,7 +576,7 @@ export function extractChromeXCookies(
         ? `Using profile: "${profileDirectory}"\n`
         : 'Using the Default profile. If your X login is in a different profile,\n' +
           'pass --chrome-profile-directory <name> (e.g., "Profile 1").\n') +
-      '\nOr pass cookies manually:  ft sync --cookies <ct0> <auth_token>'
+      '\nOr pass cookies manually:  xb sync --cookies <ct0> <auth_token>'
     );
   }
 

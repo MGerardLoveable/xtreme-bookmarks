@@ -42,7 +42,7 @@ export function GraphView(root) {
         <div class="empty-state" id="graph-empty" hidden>
           <span class="empty-icon" data-icon="network"></span>
           <h3>No graph yet</h3>
-          <p>Build your wiki with <code>ft wiki</code> to populate the knowledge graph.</p>
+          <p>Build your wiki with <code>xb wiki</code> to populate the knowledge graph.</p>
         </div>
       </div>
       <aside class="graph-sidebar">
@@ -83,13 +83,16 @@ export function GraphView(root) {
   let cy = null;
   let data = { nodes: [], edges: [] };
   let focusedNode = null;
+  let loadVersion = 0;
 
   async function load() {
+    const version = ++loadVersion;
     try {
       const [graph, stats] = await Promise.all([
         api.brainGraphData(),
         api.brainGraphStats().catch(() => ({ totalNodes: 0, totalEdges: 0, clusters: 0, contradictions: 0, topConnected: [] })),
       ]);
+      if (version !== loadVersion) return;
       data = graph;
 
       $('#stat-nodes', root).textContent = fmtNumber(stats.totalNodes || 0);
@@ -164,6 +167,11 @@ export function GraphView(root) {
 
     if (cy) { cy.destroy(); cy = null; }
 
+    const theme = getComputedStyle(document.documentElement);
+    const foreground = theme.getPropertyValue('--fg').trim() || '#1d241f';
+    const muted = theme.getPropertyValue('--fg-3').trim() || '#7f8a83';
+    const background = theme.getPropertyValue('--bg').trim() || '#f4f6f2';
+    const brand = theme.getPropertyValue('--brand').trim() || '#2f6f5e';
     cy = cytoscape({
       container: $('#cy', root),
       elements: { nodes, edges },
@@ -176,13 +184,13 @@ export function GraphView(root) {
           style: {
             'background-color': (el) => NODE_COLORS[el.data('type')] || NODE_COLORS.entity,
             'label': 'data(label)',
-            'font-family': 'Inter, system-ui, sans-serif',
+            'font-family': 'Outfit, system-ui, sans-serif',
             'font-size': 11,
             'font-weight': 500,
-            'color': 'var(--fg)',
+            'color': foreground,
             'text-valign': 'bottom',
             'text-margin-y': 4,
-            'text-outline-color': 'var(--bg)',
+            'text-outline-color': background,
             'text-outline-width': 2,
             'width': (el) => Math.min(42, 12 + Math.sqrt(el.data('mentions') || 1) * 4),
             'height': (el) => Math.min(42, 12 + Math.sqrt(el.data('mentions') || 1) * 4),
@@ -200,9 +208,9 @@ export function GraphView(root) {
             'arrow-scale': 0.7,
             'label': 'data(relation)',
             'font-size': 9,
-            'color': 'var(--fg-3)',
+            'color': muted,
             'text-rotation': 'autorotate',
-            'text-background-color': 'var(--bg)',
+            'text-background-color': background,
             'text-background-opacity': 0.8,
             'text-background-padding': 2,
           },
@@ -217,7 +225,7 @@ export function GraphView(root) {
         },
         {
           selector: '.highlighted',
-          style: { 'border-width': 3, 'border-color': 'var(--brand)' },
+          style: { 'border-width': 3, 'border-color': brand },
         },
       ],
       layout: {
@@ -290,7 +298,7 @@ export function GraphView(root) {
       if (!loaded) { load(); loaded = true; }
       else if (cy) setTimeout(() => { cy.resize(); cy.fit(undefined, 40); }, 30);
     },
-    onHide() {},
+    onHide() { loadVersion += 1; },
     onKey() {},
   };
 }

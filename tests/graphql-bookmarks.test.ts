@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { access, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   convertTweetToRecord,
   parseBookmarksResponse,
@@ -8,8 +11,10 @@ import {
   mergeBookmarkRecord,
   mergeRecords,
   formatSyncResult,
+  syncBookmarksGraphQL,
 } from '../src/graphql-bookmarks.js';
 import type { BookmarkRecord } from '../src/types.js';
+import { browserSessionCachePath } from '../src/paths.js';
 
 const NOW = '2026-03-28T00:00:00.000Z';
 
@@ -125,6 +130,7 @@ test('convertTweetToRecord: produces a complete record from a full tweet', () =>
   assert.equal(result.syncedAt, NOW);
   assert.equal(result.ingestedVia, 'graphql');
   assert.equal(result.language, 'en');
+  assert.equal(result.postedAt, '2026-03-10T12:00:00.000Z');
 });
 
 test('convertTweetToRecord: extracts author snapshot with all fields', () => {
@@ -376,10 +382,54 @@ test('parseBookmarksResponse: parses entries and cursor', () => {
   assert.equal(nextCursor, 'cursor-abc-123');
 });
 
-test('parseBookmarksResponse: returns empty when no instructions', () => {
-  const { records, nextCursor } = parseBookmarksResponse({}, NOW);
-  assert.equal(records.length, 0);
+test('parseBookmarksResponse: rejects schema drift instead of treating it as the end', () => {
+  assert.throws(() => parseBookmarksResponse({}, NOW), /response changed/);
+});
+
+test('parseBookmarksResponse: rejects GraphQL errors even on HTTP success', () => {
+  assert.throws(
+    () => parseBookmarksResponse({ errors: [{ message: 'Authorization failed' }] }, NOW),
+    /Authorization failed/,
+  );
+});
+
+test('parseBookmarksResponse: accepts an explicit empty timeline', () => {
+  const response = makeGraphQLResponse([]);
+  const { records, nextCursor } = parseBookmarksResponse(response, NOW);
+  assert.deepEqual(records, []);
   assert.equal(nextCursor, undefined);
+});
+
+test('syncBookmarksGraphQL invalidates cached browser credentials on 401 without echoing secrets', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  const cachePath = browserSessionCachePath();
+  await writeFile(cachePath, JSON.stringify({
+    browserId: 'chrome',
+    csrfToken: 'cached-csrf-secret',
+    cookieHeader: 'auth_token=cached-auth-secret',
+    savedAt: Date.now(),
+  }));
+  globalThis.fetch = async () => new Response('auth_token=server-echo-secret', { status: 401 });
+
+  try {
+    await assert.rejects(
+      syncBookmarksGraphQL({
+        csrfToken: 'request-csrf-secret',
+        cookieHeader: 'auth_token=request-auth-secret',
+        maxPages: 1,
+        delayMs: 0,
+      }),
+      (err: Error) => err.message.includes('401') && !err.message.includes('secret'),
+    );
+    await assert.rejects(access(cachePath), (err: NodeJS.ErrnoException) => err.code === 'ENOENT');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
 });
 
 test('parseBookmarksResponse: no cursor when not present', () => {

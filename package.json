@@ -4,20 +4,23 @@
   "description": "Xtreme Bookmarks — 2nd Brain knowledge engine. Sync X/Twitter bookmarks, build a wiki, run maintenance agents, and manage tiered memory.",
   "type": "module",
   "bin": {
-    "ftb": "bin/ft.mjs",
-    "xb": "bin/ft.mjs",
-    "xtreme-bookmarks": "bin/ft.mjs"
+    "xb": "bin/xb.mjs",
+    "xtreme-bookmarks": "bin/xb.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/**/*.test.ts",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "prepublishOnly": "npm run build"
+    "verify:package": "node scripts/verify-package.mjs",
+    "release:check": "npm run typecheck && npm run build && npm test && npm run verify:package",
+    "prepublishOnly": "npm run release:check"
   },
   "files": [
     "bin/",
     "dist/",
+    "web/",
     "LICENSE",
     "README.md"
   ],

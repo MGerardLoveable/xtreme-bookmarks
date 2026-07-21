@@ -54,6 +54,7 @@ function mediaThumb(mediaItems) {
 }
 
 export function LibraryView(root) {
+  let inboxSince = localStorage.getItem('xb.v2.inbox.since') || new Date(Date.now() - 7 * 86400000).toISOString();
   const state = {
     filters: { q: '', author: null, category: null, domain: null, collection: null, readStatus: null },
     sort: 'desc',
@@ -66,7 +67,10 @@ export function LibraryView(root) {
     loading: false,
     hasMore: false,
     facets: { categories: [], domains: [], collections: [], authors: [] },
+    inbox: false,
   };
+  let listController = null;
+  let detailController = null;
 
   root.innerHTML = `
     <div class="library">
@@ -101,6 +105,9 @@ export function LibraryView(root) {
 
       <section class="library-main">
         <div class="library-toolbar">
+          <button class="btn btn-sm inbox-toggle" id="lib-inbox" title="Review items added since your last review">
+            <span data-icon="inbox"></span><span>Inbox</span>
+          </button>
           <div class="search library-search">
             <span class="search-icon" data-icon="search"></span>
             <input class="input" id="lib-search" type="text" placeholder="Search bookmarks, @handles, category:tool…" autocomplete="off" spellcheck="false">
@@ -120,6 +127,9 @@ export function LibraryView(root) {
           <button class="btn btn-ghost btn-sm" id="lib-clear" title="Clear all filters">
             <span data-icon="x"></span>Clear
           </button>
+          <button class="icon-btn library-filter-toggle" id="lib-filters" title="Show filters" aria-label="Show filters" aria-expanded="false">
+            <span data-icon="sliders-horizontal"></span>
+          </button>
         </div>
         <div class="library-grab-status" id="lib-grab-status" hidden>
           <span class="library-grab-spinner" aria-hidden="true"></span>
@@ -130,6 +140,7 @@ export function LibraryView(root) {
         <div class="bookmark-list" id="lib-list"></div>
       </section>
 
+      <button class="library-rail-scrim" id="lib-rail-scrim" aria-label="Close filters" hidden></button>
       <aside class="library-detail" id="lib-detail" aria-label="Bookmark detail">
         <div class="detail-empty">Select a bookmark to read, annotate, and organize.</div>
       </aside>
@@ -363,6 +374,8 @@ export function LibraryView(root) {
   function clearAll() {
     state.filters = { q: '', author: null, category: null, domain: null, collection: null, readStatus: null };
     els.search.value = '';
+    state.inbox = false;
+    $('#lib-inbox', root).classList.remove('btn-on');
     state.offset = 0;
     renderActive();
     renderRails();
@@ -371,6 +384,8 @@ export function LibraryView(root) {
 
   // ── Load bookmarks ────────────────────────────────────────────────────────
   async function load(append = false) {
+    listController?.abort();
+    listController = new AbortController();
     state.loading = true;
     if (!append) renderSkeleton();
     try {
@@ -381,11 +396,12 @@ export function LibraryView(root) {
         domain: state.filters.domain || undefined,
         collection: state.filters.collection || undefined,
         readStatus: state.filters.readStatus || undefined,
+        after: state.inbox ? inboxSince : undefined,
         sort: state.sort,
         limit: PAGE_SIZE,
         offset: state.offset,
       };
-      const { bookmarks, total } = await api.listBookmarks(params);
+      const { bookmarks, total } = await api.listBookmarks(params, { signal: listController.signal });
       state.total = total;
       state.hasMore = state.offset + bookmarks.length < total;
       state.bookmarks = append ? [...state.bookmarks, ...bookmarks] : bookmarks;
@@ -393,6 +409,7 @@ export function LibraryView(root) {
       renderSummary();
       if (!append) renderRails(); // status counts may update
     } catch (err) {
+      if (err.name === 'AbortError') return;
       els.list.innerHTML = `<div class="empty-state"><h3>Couldn't load</h3><p>${escape(err.message)}</p></div>`;
     } finally {
       state.loading = false;
@@ -406,7 +423,18 @@ export function LibraryView(root) {
     els.summary.innerHTML = `
       <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> of ${fmtNumber(total)} results</span>
       ${activeFilter ? `<span class="summary-context">${escape(String(activeFilter))}</span>` : ''}
+      ${state.inbox ? `<span class="summary-context"><span data-icon="inbox"></span>Since ${escape(new Date(inboxSince).toLocaleDateString())}</span><button class="btn btn-sm btn-ghost" id="lib-inbox-done">Mark inbox reviewed</button>` : ''}
     `;
+    renderIcons(els.summary);
+    $('#lib-inbox-done', els.summary)?.addEventListener('click', () => {
+      localStorage.setItem('xb.v2.inbox.since', new Date().toISOString());
+      inboxSince = localStorage.getItem('xb.v2.inbox.since');
+      state.inbox = false;
+      $('#lib-inbox', root).classList.remove('btn-on');
+      state.offset = 0;
+      load();
+      toast('Inbox reviewed');
+    });
   }
 
   function renderSkeleton() {
@@ -461,15 +489,18 @@ export function LibraryView(root) {
     const avatar = b.authorProfileImageUrl
       ? `<img src="${escape(b.authorProfileImageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'bookmark-avatar-fallback',textContent:'${escape((b.authorName || b.authorHandle || '?').slice(0, 1).toUpperCase())}'}))">`
       : `<div class="bookmark-avatar-fallback">${escape((b.authorName || b.authorHandle || '?').slice(0, 1).toUpperCase())}</div>`;
-    const wikiTag = b.inWiki ? '<span class="chip"><span data-icon="brain-circuit"></span>Brain</span>' : '';
+    const wikiTag = b.inWiki ? '<span class="chip"><span data-icon="brain-circuit"></span>Topic source</span>' : '';
     const tags = [
       wikiTag,
       ...(b.categories || []).slice(0, 3).map((c) => `<span class="chip chip-cat chip-cat-${escape(String(c).toLowerCase())}">${escape(c)}</span>`),
     ].filter(Boolean).join('');
     const postedOrBookmarked = b.bookmarkedAt || b.postedAt;
-    const row = el('div', {
+    const row = el('article', {
       class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}`,
       dataset: { id: b.id, idx: String(idx) },
+      tabindex: '0',
+      role: 'button',
+      'aria-label': `Open bookmark by ${b.authorName || b.authorHandle || 'Unknown'}`,
     });
     row.innerHTML = `
       <div class="bookmark-avatar">${avatar}</div>
@@ -489,7 +520,7 @@ export function LibraryView(root) {
         <button class="row-action" data-row-action="read" title="${b.isRead ? 'Mark unread' : 'Mark read'}" aria-label="${b.isRead ? 'Mark unread' : 'Mark read'}">
           <span data-icon="${b.isRead ? 'eye-off' : 'check-circle'}"></span>
         </button>
-        <button class="row-action" data-row-action="brain" title="${b.inWiki ? 'Remove from Brain' : 'Add to Brain'}" aria-label="${b.inWiki ? 'Remove from Brain' : 'Add to Brain'}">
+        <button class="row-action" data-row-action="brain" title="${b.inWiki ? 'Remove from Topics' : 'Add to Topics'}" aria-label="${b.inWiki ? 'Remove from Topics' : 'Add to Topics'}">
           <span data-icon="brain-circuit"></span>
         </button>
         <a class="row-action" href="${escape(b.url || '#')}" target="_blank" rel="noopener" data-row-action="open" title="Open on X" aria-label="Open on X">
@@ -517,7 +548,7 @@ export function LibraryView(root) {
             b.inWiki = Boolean(res.inWiki);
             patchBookmark(b.id, { inWiki: b.inWiki });
             renderList();
-            toast(b.inWiki ? 'Added to Brain' : 'Removed from Brain');
+            toast(b.inWiki ? 'Added to Topics' : 'Removed from Topics');
           }
         } catch (err) {
           toast(`Action failed: ${err.message}`);
@@ -527,20 +558,29 @@ export function LibraryView(root) {
       });
     });
     row.addEventListener('click', () => select(b.id));
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        select(b.id);
+      }
+    });
     return row;
   }
 
   // ── Detail pane ───────────────────────────────────────────────────────────
   async function select(id) {
+    detailController?.abort();
+    detailController = new AbortController();
     state.activeId = id;
     // Update row highlight
     $$('.bookmark-row', els.list).forEach((r) => r.classList.toggle('active', r.dataset.id === id));
 
     try {
-      const b = await api.getBookmark(id);
+      const b = await api.getBookmark(id, { signal: detailController.signal });
       renderDetail(b);
       shell.classList.add('detail-open');
     } catch (err) {
+      if (err.name === 'AbortError') return;
       els.detail.innerHTML = `<div class="detail-empty">Failed to load: ${escape(err.message)}</div>`;
       shell.classList.add('detail-open');
     }
@@ -634,10 +674,10 @@ export function LibraryView(root) {
             <span data-icon="${b.isRead ? 'eye-off' : 'check-circle'}"></span>${b.isRead ? 'Mark unread' : 'Mark read'}
           </button>
           <button class="btn btn-block ${b.inWiki ? 'btn-on' : ''}" id="detail-wiki">
-            <span data-icon="brain-circuit"></span>${b.inWiki ? 'In Brain' : 'Add to Brain'}
+            <span data-icon="brain-circuit"></span>${b.inWiki ? 'In Topics' : 'Add to Topics'}
           </button>
           <button class="btn btn-block" id="detail-build-brain">
-            <span data-icon="zap"></span>Build Brain
+            <span data-icon="zap"></span>Refresh topic index
           </button>
         </div>
 
@@ -728,18 +768,18 @@ export function LibraryView(root) {
         patchBookmark(b.id, { inWiki: b.inWiki });
         renderList();
         renderDetail(b);
-        toast(b.inWiki ? 'Added to Brain' : 'Removed from Brain');
-      } catch (err) { toast(`Brain update failed: ${err.message}`); }
+        toast(b.inWiki ? 'Added to Topics' : 'Removed from Topics');
+      } catch (err) { toast(`Topic update failed: ${err.message}`); }
     });
 
     $('#detail-build-brain', els.detail).addEventListener('click', async () => {
       const btn = $('#detail-build-brain', els.detail);
       btn.disabled = true;
-      toast('Building Brain…');
+      toast('Refreshing topic index…');
       try {
         await api.wikiStream((event, data) => {
           if (event === 'progress' && data?.message) toast(data.message, 1800);
-          if (event === 'done') toast('Brain rebuilt', 2600);
+          if (event === 'done') toast('Topic index refreshed', 2600);
           if (event === 'error') toast(`Build failed: ${data?.message || 'unknown'}`);
         });
       } catch (err) {
@@ -860,6 +900,22 @@ export function LibraryView(root) {
     btn.addEventListener('click', () => setDisplayMode(btn.dataset.mode));
   });
   els.clear.addEventListener('click', clearAll);
+  $('#lib-inbox', root).addEventListener('click', () => {
+    state.inbox = !state.inbox;
+    $('#lib-inbox', root).classList.toggle('btn-on', state.inbox);
+    if (state.inbox) setDisplayMode('triage');
+    state.offset = 0;
+    load();
+  });
+  const filterButton = $('#lib-filters', root);
+  const filterScrim = $('#lib-rail-scrim', root);
+  function setFiltersOpen(open) {
+    root.classList.toggle('filters-open', open);
+    filterButton.setAttribute('aria-expanded', String(open));
+    filterScrim.hidden = !open;
+  }
+  filterButton.addEventListener('click', () => setFiltersOpen(!root.classList.contains('filters-open')));
+  filterScrim.addEventListener('click', () => setFiltersOpen(false));
   applyPresentation();
 
   // ── Initial load ──────────────────────────────────────────────────────────
@@ -884,7 +940,7 @@ export function LibraryView(root) {
       if (!state.bookmarks.length) load();
       renderActive();
     },
-    onHide() {},
+    onHide() { listController?.abort(); detailController?.abort(); },
     onKey(e) {
       if (e.key === 'j') { e.preventDefault(); moveSelection(1); }
       else if (e.key === 'k') { e.preventDefault(); moveSelection(-1); }

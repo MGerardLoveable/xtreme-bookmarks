@@ -33,6 +33,9 @@ type BookmarkApiResponse = {
   };
 };
 
+const API_FETCH_TIMEOUT_MS = 30_000;
+const API_FETCH_ATTEMPTS = 4;
+
 function makeBookmark(record: Partial<BookmarkRecord> & Pick<BookmarkRecord, 'id' | 'tweetId' | 'url' | 'text'>): BookmarkRecord {
   return {
     id: record.id,
@@ -41,22 +44,33 @@ function makeBookmark(record: Partial<BookmarkRecord> & Pick<BookmarkRecord, 'id
     text: record.text,
     authorHandle: record.authorHandle,
     authorName: record.authorName,
+    postedAt: record.postedAt,
     bookmarkedAt: record.bookmarkedAt,
+    sortIndex: record.sortIndex,
     syncedAt: record.syncedAt ?? new Date().toISOString(),
     media: record.media ?? [],
     links: record.links ?? [],
     tags: record.tags ?? [],
+    ingestedVia: record.ingestedVia,
   };
 }
 
 async function fetchJsonWithUserToken(url: string, accessToken: string, method = 'GET'): Promise<{ ok: boolean; status: number; parsed: any; text: string }> {
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_FETCH_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const text = await response.text();
   let parsed: any = null;
@@ -72,6 +86,57 @@ async function fetchJsonWithUserToken(url: string, accessToken: string, method =
     parsed,
     text,
   };
+}
+
+function normalizeTimestamp(value?: string | null): string | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function compareChronology(a: BookmarkRecord, b: BookmarkRecord): number {
+  if (a.sortIndex && b.sortIndex && a.sortIndex !== b.sortIndex) {
+    try {
+      return BigInt(a.sortIndex) > BigInt(b.sortIndex) ? -1 : 1;
+    } catch { /* fall through to timestamps */ }
+  }
+  const aTimestamp = normalizeTimestamp(a.bookmarkedAt ?? a.postedAt ?? a.syncedAt) ?? '';
+  const bTimestamp = normalizeTimestamp(b.bookmarkedAt ?? b.postedAt ?? b.syncedAt) ?? '';
+  return bTimestamp.localeCompare(aTimestamp);
+}
+
+function mergeApiRecord(existing: BookmarkRecord | undefined, incoming: BookmarkRecord): BookmarkRecord {
+  if (!existing) return incoming;
+  return {
+    ...existing,
+    ...incoming,
+    author: incoming.author ?? existing.author,
+    authorProfileImageUrl: incoming.authorProfileImageUrl ?? existing.authorProfileImageUrl,
+    engagement: incoming.engagement ?? existing.engagement,
+    media: incoming.media?.length ? incoming.media : existing.media,
+    mediaObjects: incoming.mediaObjects?.length ? incoming.mediaObjects : existing.mediaObjects,
+    links: incoming.links?.length ? incoming.links : existing.links,
+    tags: existing.tags ?? incoming.tags,
+    quotedTweet: incoming.quotedTweet ?? existing.quotedTweet,
+    sortIndex: incoming.sortIndex ?? existing.sortIndex,
+  };
+}
+
+function validateBookmarkApiPage(value: any): BookmarkApiResponse {
+  if (!value || typeof value !== 'object') throw new Error('X bookmarks API returned invalid JSON data.');
+  if (Array.isArray(value.errors) && value.errors.length > 0) {
+    throw new Error(`X bookmarks API returned errors: ${formatApiDetail(value, 'unknown API error')}`);
+  }
+  if (value.data !== undefined && !Array.isArray(value.data)) {
+    throw new Error('X bookmarks API response changed: expected data to be an array.');
+  }
+  if (value.meta !== undefined && (!value.meta || typeof value.meta !== 'object')) {
+    throw new Error('X bookmarks API response changed: expected meta to be an object.');
+  }
+  if (value.data === undefined && value.meta?.result_count !== 0) {
+    throw new Error('X bookmarks API response changed: bookmark data is missing.');
+  }
+  return value as BookmarkApiResponse;
 }
 
 function formatApiDetail(parsed: any, fallback: string): string {
@@ -127,6 +192,7 @@ export function normalizeBookmarkPage(page: BookmarkApiResponse, syncedAt: strin
       authorHandle: user?.username,
       authorName: user?.name,
       // The v2 bookmarks endpoint exposes tweet creation, not bookmark creation.
+      postedAt: normalizeTimestamp(tweet.created_at),
       bookmarkedAt: null,
       syncedAt,
       links: (tweet.entities?.urls ?? []).map((u) => u.expanded_url ?? u.url ?? '').filter(Boolean),
@@ -142,10 +208,17 @@ async function fetchBookmarksPage(accessToken: string, userId: string, nextToken
   url.searchParams.set('user.fields', 'username,name');
   if (nextToken) url.searchParams.set('pagination_token', nextToken);
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const result = await fetchJsonWithUserToken(url.toString(), accessToken);
+  for (let attempt = 0; attempt < API_FETCH_ATTEMPTS; attempt++) {
+    let result: Awaited<ReturnType<typeof fetchJsonWithUserToken>>;
+    try {
+      result = await fetchJsonWithUserToken(url.toString(), accessToken);
+    } catch (err) {
+      if (attempt === API_FETCH_ATTEMPTS - 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      continue;
+    }
 
-    if (result.status === 429) {
+    if (result.status === 429 || result.status >= 500) {
       const waitSec = Math.min(15 * Math.pow(2, attempt), 120);
       await new Promise((r) => setTimeout(r, waitSec * 1000));
       continue;
@@ -164,7 +237,7 @@ async function fetchBookmarksPage(accessToken: string, userId: string, nextToken
       ok: true,
       status: result.status,
       detail: 'ok',
-      page: result.parsed as BookmarkApiResponse,
+      page: validateBookmarkApiPage(result.parsed),
       requestUrl: url.toString(),
     };
   }
@@ -183,7 +256,7 @@ export async function syncTwitterBookmarks(
 ): Promise<BookmarkSyncResult> {
   const token = await loadValidTwitterOAuthToken();
   if (!token?.access_token) {
-    throw new Error('Missing user-context OAuth token. Run: ft auth');
+    throw new Error('Missing user-context OAuth token. Run: xb auth');
   }
 
   const me = await fetchCurrentUserId(token.access_token);
@@ -201,6 +274,7 @@ export async function syncTwitterBookmarks(
   const allFetched: BookmarkRecord[] = [];
   let nextToken: string | undefined;
   let pages = 0;
+  let reachedEnd = false;
   const maxPages = mode === 'full' ? 200 : 2;
 
   while (pages < maxPages) {
@@ -214,7 +288,10 @@ export async function syncTwitterBookmarks(
     nextToken = pageResult.page.meta?.next_token;
     pages += 1;
 
-    if (!nextToken) break;
+    if (!nextToken) {
+      reachedEnd = true;
+      break;
+    }
     if (mode === 'incremental' && normalized.every((item) => existingById.has(item.id))) break;
     if (typeof options.targetAdds === 'number') {
       const uniqueAddsSoFar = allFetched.filter((item, index, arr) => arr.findIndex((x) => x.id === item.id) === index).filter((item) => !existingById.has(item.id)).length;
@@ -222,18 +299,17 @@ export async function syncTwitterBookmarks(
     }
   }
 
-  const merged = [...existing];
-  let added = 0;
+  const mergedById = new Map(existing.map((record) => [record.id, record]));
+  const addedIds = new Set<string>();
   for (const record of allFetched) {
-    if (!existingById.has(record.id)) {
-      merged.push(record);
-      existingById.set(record.id, record);
-      added += 1;
-      if (typeof options.targetAdds === 'number' && added >= options.targetAdds) break;
-    }
+    if (!existingById.has(record.id)) addedIds.add(record.id);
+    mergedById.set(record.id, mergeApiRecord(mergedById.get(record.id), record));
   }
 
-  merged.sort((a, b) => String(b.bookmarkedAt ?? b.syncedAt).localeCompare(String(a.bookmarkedAt ?? a.syncedAt)));
+  const merged = mode === 'full' && reachedEnd
+    ? Array.from(new Set(allFetched.map((record) => record.id))).map((id) => mergedById.get(id)!)
+    : Array.from(mergedById.values());
+  merged.sort(compareChronology);
   await writeJsonLines(cachePath, merged);
 
   const previousMeta = (await pathExists(metaPath)) ? await readJson<BookmarkCacheMeta>(metaPath) : undefined;
@@ -249,7 +325,7 @@ export async function syncTwitterBookmarks(
   return {
     mode,
     totalBookmarks: merged.length,
-    added,
+    added: addedIds.size,
     cachePath,
     metaPath,
   };
@@ -269,14 +345,14 @@ export async function deleteTwitterBookmark(tweetId: string): Promise<DeleteTwit
 
   const token = await loadValidTwitterOAuthToken();
   if (!token?.access_token) {
-    throw new Error('Missing user-context OAuth token. Run: ft auth, then try "Remove from X too" again.');
+    throw new Error('Missing user-context OAuth token. Run: xb auth, then try "Remove from X too" again.');
   }
 
   const requiredScopes = ['tweet.read', 'users.read', 'bookmark.write'];
   if (!hasOAuthScopes(token, requiredScopes)) {
     throw new Error(
       `OAuth token is missing ${requiredScopes.filter((scope) => !hasOAuthScopes(token, [scope])).join(', ')}. ` +
-      'Run: ft auth again so Xtreme can request bookmark.write.'
+      'Run: xb auth again so Xtreme can request bookmark.write.'
     );
   }
 

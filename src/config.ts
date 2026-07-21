@@ -12,15 +12,18 @@ export interface ChromeSessionConfig {
 }
 
 export function loadEnv(): void {
-  const dir = dataDir();
-  const candidatePaths = [
+  const cwdPaths = [
     path.join(process.cwd(), '.env.local'),
     path.join(process.cwd(), '.env'),
-    path.join(dir, '.env.local'),
-    path.join(dir, '.env'),
   ];
 
-  for (const envPath of candidatePaths) {
+  // Load project overrides first because they may define the data directory itself.
+  for (const envPath of cwdPaths) {
+    loadDotenv({ path: envPath, quiet: true });
+  }
+
+  const dir = dataDir();
+  for (const envPath of [path.join(dir, '.env.local'), path.join(dir, '.env')]) {
     loadDotenv({ path: envPath, quiet: true });
   }
 }
