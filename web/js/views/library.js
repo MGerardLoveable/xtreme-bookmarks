@@ -104,6 +104,16 @@ export function LibraryView(root) {
       </aside>
 
       <section class="library-main">
+        <header class="library-context">
+          <div>
+            <span class="library-eyebrow">Signal archive</span>
+            <h1>Research Library</h1>
+          </div>
+          <div class="library-context-meta">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>Local index</span>
+          </div>
+        </header>
         <div class="library-toolbar">
           <button class="btn btn-sm inbox-toggle" id="lib-inbox" title="Review items added since your last review">
             <span data-icon="inbox"></span><span>Inbox</span>
@@ -142,7 +152,13 @@ export function LibraryView(root) {
 
       <button class="library-rail-scrim" id="lib-rail-scrim" aria-label="Close filters" hidden></button>
       <aside class="library-detail" id="lib-detail" aria-label="Bookmark detail">
-        <div class="detail-empty">Select a bookmark to read, annotate, and organize.</div>
+        <div class="detail-empty detail-empty-shell">
+          <span class="detail-empty-icon" data-icon="library"></span>
+          <span class="detail-empty-kicker">Reading desk</span>
+          <h2>Open a signal</h2>
+          <p>Select any bookmark to read the full post, inspect media, add notes, or file it into a Topic.</p>
+          <span class="detail-empty-hint"><kbd>j</kbd><kbd>k</kbd> to move through the queue</span>
+        </div>
       </aside>
     </div>
   `;
@@ -618,7 +634,18 @@ export function LibraryView(root) {
   }
 
   function renderDetail(b) {
-    if (!b) { els.detail.innerHTML = `<div class="detail-empty">Select a bookmark to read, annotate, and organize.</div>`; return; }
+    if (!b) {
+      els.detail.innerHTML = `
+        <div class="detail-empty detail-empty-shell">
+          <span class="detail-empty-icon" data-icon="library"></span>
+          <span class="detail-empty-kicker">Reading desk</span>
+          <h2>Open a signal</h2>
+          <p>Select any bookmark to read the full post, inspect media, add notes, or file it into a Topic.</p>
+          <span class="detail-empty-hint"><kbd>j</kbd><kbd>k</kbd> to move through the queue</span>
+        </div>`;
+      renderIcons(els.detail);
+      return;
+    }
 
     const avatar = b.authorProfileImageUrl
       ? `<img src="${escape(b.authorProfileImageUrl)}" alt="" style="width:48px;height:48px;border-radius:50%;object-fit:cover" referrerpolicy="no-referrer">`
