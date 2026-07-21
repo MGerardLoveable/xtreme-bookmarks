@@ -142,6 +142,18 @@ Override the location with `XTREME_BOOKMARKS_DATA_DIR`:
 export XTREME_BOOKMARKS_DATA_DIR=/path/to/custom/dir
 ```
 
+### Keep the web app running on macOS
+
+Install Xtreme Bookmarks as a user service so it starts at login and restarts
+automatically if the server exits:
+
+```bash
+XTREME_BOOKMARKS_DATA_DIR=/path/to/custom/dir npm run service:install:mac
+```
+
+The service listens on `http://127.0.0.1:3848/` and writes logs to
+`~/Library/Logs/XtremeBookmarks/`.
+
 To remove all data: `rm -rf ~/.xtreme-bookmarks`
 
 ## Categories
