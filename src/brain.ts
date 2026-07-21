@@ -4,6 +4,7 @@ import { openDb, saveDb } from './db.js';
 import { ensureDir, pathExists, readMd, writeMd } from './fs.js';
 import { mdDir, twitterBookmarksIndexPath } from './paths.js';
 import type { Database } from 'sql.js';
+import type { KnowledgeItem, KnowledgeItemKind, KnowledgeTopic } from './types.js';
 
 export type BrainAgentType = 'repo_watcher' | 'research_scout' | 'memory_curator';
 export type BrainWorkflowId = 'capture' | 'distill' | 'connect' | 'watch' | 'review' | 'repair' | 'publish';
@@ -852,7 +853,7 @@ function rowToFinding(row: unknown[]): BrainFinding {
   };
 }
 
-function rowToArtifact(row: unknown[]): BrainArtifact {
+export function rowToBrainArtifact(row: unknown[]): BrainArtifact {
   return {
     id: String(row[0]),
     sourceType: String(row[1] ?? ''),
@@ -870,6 +871,52 @@ function rowToArtifact(row: unknown[]): BrainArtifact {
   };
 }
 
+/** Compatibility adapter: Brain spaces are canonical Topics at the service boundary. */
+export function brainSpaceToKnowledgeTopic(space: BrainSpace): KnowledgeTopic {
+  return {
+    id: space.id,
+    name: space.name,
+    description: space.description,
+    keywords: [...space.keywords],
+    createdAt: space.createdAt,
+    updatedAt: space.updatedAt,
+    itemCount: space.bookmarkCount,
+    legacy: {
+      category: space.category,
+      domain: space.domain,
+      collection: space.collection,
+      pagePath: space.pagePath,
+    },
+  };
+}
+
+/** Compatibility adapter: existing memory cards remain valid canonical Items. */
+export function brainArtifactToKnowledgeItem(artifact: BrainArtifact): KnowledgeItem {
+  const supportedKinds = new Set<KnowledgeItemKind>(['bookmark', 'note', 'x_feed', 'concept', 'synthesis', 'repo_event', 'web_source']);
+  const kind = supportedKinds.has(artifact.sourceType as KnowledgeItemKind)
+    ? artifact.sourceType as KnowledgeItemKind
+    : 'web_source';
+  return {
+    id: artifact.id,
+    kind,
+    title: artifact.title,
+    body: artifact.body,
+    url: artifact.url,
+    author: artifact.author,
+    topicIds: artifact.spaceId ? [artifact.spaceId] : [],
+    createdAt: artifact.capturedAt,
+    updatedAt: artifact.updatedAt,
+    confidence: artifact.confidence,
+    provenance: {
+      sourceType: artifact.sourceType,
+      sourceId: artifact.sourceId,
+      sourceUrl: artifact.url,
+      sourceLabel: artifact.sourceLabel,
+      capturedAt: artifact.capturedAt,
+    },
+  };
+}
+
 function rowToWorkflow(row: unknown[]): BrainWorkflow {
   return {
     id: row[0] as BrainWorkflowId,
@@ -881,7 +928,7 @@ function rowToWorkflow(row: unknown[]): BrainWorkflow {
   };
 }
 
-function upsertArtifact(
+export function upsertBrainArtifactFromDb(
   db: Database,
   input: {
     sourceType: string;
@@ -997,7 +1044,7 @@ export function syncBrainMemoryFromDb(db: Database): { artifacts: number; create
     `);
     for (const row of rows[0]?.values ?? []) {
       const body = String(row[4] ?? '');
-      const result = upsertArtifact(db, {
+      const result = upsertBrainArtifactFromDb(db, {
         sourceType: 'bookmark',
         sourceId: String(row[2]),
         spaceId: String(row[0]),
@@ -1029,7 +1076,7 @@ export function syncBrainMemoryFromDb(db: Database): { artifacts: number; create
     for (const row of rows[0]?.values ?? []) {
       const body = String(row[2] ?? '');
       const username = String(row[1] ?? '');
-      const result = upsertArtifact(db, {
+      const result = upsertBrainArtifactFromDb(db, {
         sourceType: 'x_feed',
         sourceId: String(row[0]),
         spaceId: null,
@@ -1077,7 +1124,7 @@ export async function createBrainNote(input: { title?: string; text: string; tag
       ? getSpaceFromDb(db, input.spaceId)
       : spaces.find((space) => space.keywords.some((keyword) => haystack.includes(keyword.toLowerCase()))) ?? null;
     const sourceId = stableId('note', input.title ?? '', text, Date.now());
-    const result = upsertArtifact(db, {
+    const result = upsertBrainArtifactFromDb(db, {
       sourceType: 'note',
       sourceId,
       spaceId: matchedSpace?.id ?? null,
@@ -1099,7 +1146,7 @@ export async function createBrainNote(input: { title?: string; text: string; tag
       LEFT JOIN brain_spaces s ON s.id = a.space_id
       WHERE a.id = ?
     `, [result.id]);
-    return rowToArtifact(rows[0].values[0]);
+    return rowToBrainArtifact(rows[0].values[0]);
   } finally {
     db.close();
   }
@@ -1130,7 +1177,7 @@ export async function brainMemoryOverview(limit = 8): Promise<BrainMemoryOvervie
       edgeCount: scalar(`SELECT COUNT(*) FROM brain_edges`),
       claimCount: scalar(`SELECT COUNT(*) FROM brain_claims`),
       timelineCount: scalar(`SELECT COUNT(*) FROM brain_timeline_events`),
-      recentArtifacts: (artifactRows[0]?.values ?? []).map(rowToArtifact),
+      recentArtifacts: (artifactRows[0]?.values ?? []).map(rowToBrainArtifact),
       topEntities: (entityRows[0]?.values ?? []).map((row) => ({
         name: String(row[0] ?? ''),
         kind: String(row[1] ?? ''),

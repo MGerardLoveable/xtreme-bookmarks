@@ -1,7 +1,7 @@
 /**
  * Bookmark-to-markdown export.
  *
- * ft md [--force]
+ * xb md [--force]
  *
  * Exports each bookmark as an individual .md file with YAML frontmatter,
  * full tweet text, and [[wikilinks]] to wiki category/domain/entity pages.

@@ -110,3 +110,77 @@ export interface BookmarkBackfillState {
   /** Saved pagination cursor for resuming an interrupted sync. */
   lastCursor?: string;
 }
+
+/** Canonical knowledge model shared by Library, Brain, Ask, and future routes. */
+export type KnowledgeItemKind = 'bookmark' | 'note' | 'x_feed' | 'concept' | 'synthesis' | 'repo_event' | 'web_source';
+
+export interface KnowledgeProvenance {
+  sourceType: string;
+  sourceId: string;
+  sourceUrl?: string | null;
+  sourceLabel?: string;
+  capturedAt?: string | null;
+  /** Optional source span for annotations or quoted evidence. */
+  fragment?: string;
+}
+
+export interface KnowledgeItem {
+  id: string;
+  kind: KnowledgeItemKind;
+  title: string;
+  body: string;
+  url: string | null;
+  author: string;
+  topicIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  confidence: number;
+  provenance: KnowledgeProvenance;
+  metadata?: Record<string, unknown>;
+}
+
+export type KnowledgeAnnotationKind = 'note' | 'highlight';
+
+export interface KnowledgeAnnotation {
+  id: string;
+  itemId: string;
+  kind: KnowledgeAnnotationKind;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  color?: string;
+  provenance: KnowledgeProvenance;
+}
+
+export interface KnowledgeTopic {
+  id: string;
+  name: string;
+  description: string;
+  keywords: string[];
+  createdAt: string;
+  updatedAt: string;
+  itemCount: number;
+  /** Legacy Brain fields remain available while routes migrate to Topics. */
+  legacy?: {
+    category?: string | null;
+    domain?: string | null;
+    collection?: string | null;
+    pagePath?: string;
+  };
+}
+
+export interface KnowledgeEvidence {
+  id: string;
+  itemId: string;
+  kind: KnowledgeItemKind | KnowledgeAnnotationKind;
+  title: string;
+  excerpt: string;
+  url: string | null;
+  score: number;
+  provenance: KnowledgeProvenance;
+}
+
+export interface KnowledgeConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}

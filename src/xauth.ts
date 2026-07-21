@@ -114,7 +114,7 @@ function tokenNeedsRefresh(token: XOAuthTokenSet, skewMs = 60_000): boolean {
 
 export async function refreshTwitterOAuthToken(token: XOAuthTokenSet): Promise<XOAuthTokenSet> {
   if (!token.refresh_token) {
-    throw new Error('OAuth token expired and has no refresh token. Run: ft auth');
+    throw new Error('OAuth token expired and has no refresh token. Run: xb auth');
   }
 
   const cfg = loadXApiConfig();
@@ -203,7 +203,7 @@ export async function runTwitterOAuthFlow(): Promise<{ tokenPath: string; scope?
         }
 
         res.statusCode = 200;
-        res.end('ft auth complete. You can close this tab.');
+        res.end('xb auth complete. You can close this tab.');
         server.close();
         resolve(returnedCode);
       } catch (err) {

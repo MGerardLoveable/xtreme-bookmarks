@@ -63,6 +63,14 @@ export function AskView(root) {
           <div class="ask-composer-inner">
             <textarea class="ask-input" id="ask-input" rows="1" placeholder="Ask anything about your bookmarks…" autocomplete="off" spellcheck="true"></textarea>
             <div class="ask-composer-actions">
+              <label class="ask-scope">
+                <span data-icon="target"></span>
+                <select id="ask-scope" aria-label="Answer scope">
+                  <option value="all">All sources</option>
+                  <option value="topics">Topics</option>
+                  <option value="recent">Recent saves</option>
+                </select>
+              </label>
               <label class="ask-save">
                 <input type="checkbox" id="ask-save"> <span>Save as concept page</span>
               </label>
@@ -86,7 +94,9 @@ export function AskView(root) {
     history: $('#ask-history', root),
     suggestions: $('#ask-suggestions', root),
     newBtn: $('#ask-new', root),
+    scope: $('#ask-scope', root),
   };
+  let askController = null;
 
   // Auto-grow textarea
   function autoGrow() {
@@ -111,8 +121,9 @@ export function AskView(root) {
       return;
     }
     els.history.innerHTML = history.map((h, i) => `
-      <button class="rail-item" data-h="${i}" title="${escape(h.question)}">
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(h.question.slice(0, 60))}</span>
+      <button class="rail-item ask-history-item" data-h="${i}" title="${escape(h.question)}">
+        <strong>${escape(h.question.slice(0, 60))}</strong>
+        <small>${h.answer ? escape(h.answer.replace(/\s+/g, ' ').slice(0, 72)) : 'Answer unavailable from an older session'}</small>
       </button>
     `).join('');
     $$('.rail-item', els.history).forEach((btn) => btn.addEventListener('click', () => {
@@ -204,11 +215,14 @@ export function AskView(root) {
   }
 
   // Streaming SSE fetch
-  async function streamAsk(question, save, turn) {
+  async function streamAsk(question, save, scope, turn) {
+    askController?.abort();
+    askController = new AbortController();
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, save }),
+      body: JSON.stringify({ question, save, scope }),
+      signal: askController.signal,
     });
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
@@ -257,22 +271,23 @@ export function AskView(root) {
     const question = els.input.value.trim();
     if (!question) return;
     const save = els.save.checked;
+    const scope = els.scope.value;
 
     els.input.value = '';
     autoGrow();
     els.send.disabled = true;
 
-    const turn = { question, answer: '', pagesRead: [], wikiUpdates: [], pending: true, status: 'Thinking…' };
+    const turn = { question, scope, answer: '', pagesRead: [], wikiUpdates: [], pending: true, status: 'Thinking…' };
     conversation.push(turn);
     renderConversation(conversation);
 
     try {
-      await streamAsk(question, save, turn);
-      // Push to history
-      history.unshift({ question, ts: Date.now() });
+      await streamAsk(question, save, scope, turn);
+      history.unshift({ ...turn, pending: false, ts: Date.now() });
       saveHistory(history);
       renderHistory();
     } catch (err) {
+      if (err.name === 'AbortError') return;
       toast(`Ask failed: ${err.message}`);
     } finally {
       els.send.disabled = false;
@@ -284,6 +299,7 @@ export function AskView(root) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
   });
   els.newBtn.addEventListener('click', () => {
+    askController?.abort();
     conversation = [];
     renderConversation(conversation);
     els.input.focus();
@@ -291,7 +307,7 @@ export function AskView(root) {
 
   return {
     onShow() { setTimeout(() => els.input.focus(), 40); },
-    onHide() {},
+    onHide() { askController?.abort(); },
     onKey() {},
   };
 }

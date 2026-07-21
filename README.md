@@ -12,6 +12,11 @@ X bookmarks are where many builders, researchers, and maintainers collect fast-m
 
 Requires Node.js 20+. Chrome, Brave, or Firefox can be used for browser-session bookmark sync; OAuth/API credentials are optional for features that need official X API access.
 
+```bash
+npm install --global xtreme-bookmarks
+xb --help
+```
+
 ## Quick start
 
 ```bash
@@ -34,7 +39,7 @@ On first run, `xb sync` uses your chosen browser session and downloads bookmarks
 | Command | Description |
 |---------|-------------|
 | `xb sync` | Download and sync bookmarks (no API required) |
-| `xb sync --full` | Full history crawl (not just incremental) |
+| `xb sync --rebuild` | Full history crawl (not just incremental) |
 | `xb sync --gaps` | Backfill missing quoted tweets and expand truncated articles |
 | `xb sync --classify` | Sync then classify new bookmarks with LLM |
 | `xb sync --api` | Sync via OAuth API |
@@ -77,25 +82,25 @@ On first run, `xb sync` uses your chosen browser session and downloads bookmarks
 
 | Command | Description |
 |---------|-------------|
-| `ft skill install` | Install `/fieldtheory` skill for Claude Code and Codex |
-| `ft skill show` | Print skill content to stdout |
-| `ft skill uninstall` | Remove installed skill files |
+| `xb skill install` | Install `/fieldtheory` skill for Claude Code and Codex |
+| `xb skill show` | Print skill content to stdout |
+| `xb skill uninstall` | Remove installed skill files |
 
 ### Utilities
 
 | Command | Description |
 |---------|-------------|
-| `ft index` | Rebuild search index from JSONL cache (preserves classifications) |
-| `ft fetch-media` | Download media assets (static images only) |
-| `ft status` | Show sync status and data location |
-| `ft path` | Print data directory path |
+| `xb index` | Rebuild search index from JSONL cache (preserves classifications) |
+| `xb fetch-media` | Download media assets (static images only) |
+| `xb status` | Show sync status and data location |
+| `xb path` | Print data directory path |
 
 ## Agent integration
 
 Install the `/fieldtheory` skill so your agent automatically searches your bookmarks when relevant:
 
 ```bash
-ft skill install     # Auto-detects Claude Code and Codex
+xb skill install     # Auto-detects Claude Code and Codex
 ```
 
 Then ask your agent:
@@ -112,10 +117,10 @@ Works with Claude Code, Codex, or any agent with shell access.
 
 ```bash
 # Sync every morning at 7am
-0 7 * * * ft sync
+0 7 * * * xb sync
 
 # Sync and classify every morning
-0 7 * * * ft sync --classify
+0 7 * * * xb sync --classify
 ```
 
 ## Data
@@ -128,7 +133,7 @@ All data is stored locally at `~/.xtreme-bookmarks/`:
   bookmarks.db            # SQLite FTS5 search index
   bookmarks-meta.json     # sync metadata
   oauth-token.json        # OAuth token (if using API mode, chmod 600)
-  md/                     # markdown knowledge base (ft wiki / ft md)
+  md/                     # markdown knowledge base (xb wiki / xb md)
 ```
 
 Override the location with `XTREME_BOOKMARKS_DATA_DIR`:
@@ -151,27 +156,37 @@ To remove all data: `rm -rf ~/.xtreme-bookmarks`
 | **opinion** | Takes, analysis, commentary, threads |
 | **commerce** | Products, shopping, physical goods |
 
-Use `ft classify` for LLM-powered classification that catches what regex misses.
+Use `xb classify` for LLM-powered classification that catches what regex misses.
 
 ## Platform support
 
 | Feature | macOS | Linux | Windows |
 |---------|-------|-------|---------|
-| Session sync (`ft sync`) | Chrome, Brave, Arc, Firefox | Firefox | Firefox |
-| OAuth API sync (`ft sync --api`) | Yes | Yes | Yes |
+| Session sync (`xb sync`) | Chrome, Brave, Arc, Firefox | Firefox | Firefox |
+| OAuth API sync (`xb sync --api`) | Yes | Yes | Yes |
 | Search, list, classify, viz, wiki | Yes | Yes | Yes |
 
-Session sync extracts cookies from your browser's local database. Use `ft sync --browser <name>` to pick a browser. On platforms where session sync isn't available, use `ft auth` + `ft sync --api`.
+Session sync extracts cookies from your browser's local database. Use `xb sync --browser <name>` to pick a browser. On platforms where session sync isn't available, use `xb auth` + `xb sync --api`.
 
 ## Security
 
-**Your data stays local.** No telemetry, no analytics, nothing phoned home. The CLI only makes network requests to X's API during sync.
+**Your archive stays local by default.** Xtreme Bookmarks has no product telemetry. Sync connects to X, and optional classification, Ask, repository watch, and research features connect to the providers you configure.
 
-**Chrome session sync** reads cookies from Chrome's local database, uses them for the sync request, and discards them. Cookies are never stored separately.
+**Browser session sync** reads cookies from the selected browser. A local session cache may retain the required X session values for up to 30 days so scheduled sync can continue; protect the Xtreme Bookmarks data directory like a credential store.
 
 **OAuth tokens** are stored with `chmod 600` (owner-only). Treat `~/.xtreme-bookmarks/oauth-token.json` like a password.
 
-**The default sync uses X's internal GraphQL API**, the same API that x.com uses in your browser. For the official v2 API, use `ft auth` + `ft sync --api`.
+**The default sync uses X's internal GraphQL API**, the same API that x.com uses in your browser. For the official v2 API, use `xb auth` + `xb sync --api`.
+
+## Maintainer release check
+
+Run the same checks used by CI before publishing:
+
+```bash
+npm run release:check
+```
+
+The package verifier inspects npm's real dry-run manifest and fails if the CLI launcher, compiled server, or web assets are missing.
 
 ## Maintainer workflows
 

@@ -20,10 +20,10 @@ describe('skill content', () => {
 
   it('both versions include key commands', () => {
     for (const content of [skillWithFrontmatter(), skillBody()]) {
-      assert.ok(content.includes('ft search'));
-      assert.ok(content.includes('ft list'));
-      assert.ok(content.includes('ft stats'));
-      assert.ok(content.includes('ft show'));
+      assert.ok(content.includes('xb search'));
+      assert.ok(content.includes('xb list'));
+      assert.ok(content.includes('xb stats'));
+      assert.ok(content.includes('xb show'));
     }
   });
 

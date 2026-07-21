@@ -1,4 +1,4 @@
-// X Feed view — browser-session watchlist and saved posts/replies.
+// Radar view — browser-session watchlist and saved posts/replies.
 
 import { api, fmtDate, fmtNumber, fmtRelativeTime } from '../api.js';
 import { $, debounce, escape, linkify, toast } from '../util.js';
@@ -16,6 +16,7 @@ export function XFeedView(root) {
   let actionError = '';
   let lastWarningToastAt = '';
   let lastDelayedToastKey = '';
+  let refreshController = null;
 
   root.innerHTML = `
     <div class="xfeed">
@@ -23,8 +24,8 @@ export function XFeedView(root) {
         <div class="xfeed-brand">
           <div class="xfeed-mark"><span data-icon="bell"></span></div>
           <div>
-            <h2>X Feed</h2>
-            <p>Watch selected accounts for new posts and replies.</p>
+            <h2>Radar</h2>
+            <p>Watch selected accounts and route useful updates into your library.</p>
           </div>
         </div>
 
@@ -57,8 +58,8 @@ export function XFeedView(root) {
       <main class="xfeed-main">
         <header class="xfeed-toolbar">
           <div>
-            <h1>Account notifications</h1>
-            <p>Saved with your browser session. Posts, replies, and reposts are included.</p>
+            <h1>Research updates</h1>
+            <p>Review the signal, save what matters, and dismiss the rest.</p>
           </div>
           <div class="xfeed-toolbar-actions">
             <button class="btn btn-primary" id="xfeed-fresh-update" type="button">
@@ -455,11 +456,14 @@ export function XFeedView(root) {
   }
 
   async function refresh() {
+    refreshController?.abort();
+    refreshController = new AbortController();
+    const requestOptions = { signal: refreshController.signal };
     const feedLimit = selectedAccount ? 200 : 80;
     const [watchlist, streamStatus, feed] = await Promise.all([
-      api.xWatchlist(),
-      api.xStreamStatus(),
-      api.xFeed(feedLimit, filter, selectedAccount),
+      api.xWatchlist(requestOptions),
+      api.xStreamStatus(requestOptions),
+      api.xFeed(feedLimit, filter, selectedAccount, requestOptions),
     ]);
     accounts = watchlist.accounts || [];
     if (selectedAccount && !accounts.some((account) => account.handle === selectedAccount)) selectedAccount = '';
@@ -490,7 +494,8 @@ export function XFeedView(root) {
       await fn();
       if (options.refresh !== false) await refresh();
     } catch (err) {
-      actionError = err.payload?.userMessage || err.message || 'X Feed action failed';
+      if (err?.name === 'AbortError') return;
+      actionError = err.payload?.userMessage || err.message || 'Radar action failed';
       if (typeof options.onError === 'function') options.onError(err);
       renderStatus();
       toast(actionError, 4200);
@@ -546,17 +551,17 @@ export function XFeedView(root) {
   $('#xfeed-stop', root).addEventListener('click', (event) => withBusy(event.currentTarget, 'Stopping...', () => api.stopXStream()));
   $('#xfeed-backfill', root).addEventListener('click', (event) => withBusy(event.currentTarget, 'Checking...', async () => {
     const result = await api.backfillAllXWatchAccounts({ fast: true, async: true });
-    toast(result.alreadyRunning ? 'X Feed is already checking. New items will appear as it finishes.' : 'X Feed check started. New items will appear as accounts finish.');
+    toast(result.alreadyRunning ? 'Radar is already checking. New items will appear as it finishes.' : 'Radar check started. New items will appear as accounts finish.');
   }));
   $('#xfeed-fresh-update', root).addEventListener('click', (event) => withBusy(event.currentTarget, 'Checking...', async () => {
     const result = await api.backfillAllXWatchAccounts({ fast: true, async: true });
     toast(result.alreadyRunning ? 'Fresh update is already running. The feed will keep refreshing.' : 'Fresh update started. The feed will refresh while it checks your watchlist.');
   }));
   $('#xfeed-clear-feed', root).addEventListener('click', (event) => withBusy(event.currentTarget, 'Clearing...', async () => {
-    const label = selectedAccount ? `@${selectedAccount}` : 'the whole X Feed';
+    const label = selectedAccount ? `@${selectedAccount}` : 'the whole Radar';
     if (!confirm(`Remove all saved items from ${label}? Fresh updates will keep them removed.`)) return;
     const result = await api.clearXFeed(selectedAccount);
-    toast(selectedAccount ? `Removed ${result.removed || 0} items from @${selectedAccount}` : `Removed ${result.removed || 0} X Feed items`);
+    toast(selectedAccount ? `Removed ${result.removed || 0} items from @${selectedAccount}` : `Removed ${result.removed || 0} Radar items`);
   }));
 
   $('#xfeed-watchlist', root).addEventListener('click', async (event) => {
@@ -627,7 +632,7 @@ export function XFeedView(root) {
     const button = event.target.closest('#xfeed-clear-account-feed');
     if (!button || !selectedAccount) return;
     await withBusy(button, 'Removing...', async () => {
-      if (!confirm(`Remove all saved X Feed items from @${selectedAccount}? Fresh updates will keep them removed.`)) return;
+      if (!confirm(`Remove all Radar items from @${selectedAccount}? Fresh updates will keep them removed.`)) return;
       const result = await api.clearXFeed(selectedAccount);
       toast(`Removed ${result.removed || 0} items from @${selectedAccount}`);
     });
@@ -640,6 +645,10 @@ export function XFeedView(root) {
     await withBusy(button, 'Saving...', async () => {
       const result = await api.saveXFeedItemToBookmarks(button.dataset.saveBookmark);
       toast(result.saved ? 'Saved to Library' : 'Already in Library');
+      button.disabled = true;
+      button.classList.add('btn-on');
+      button.innerHTML = '<span data-icon="check-circle"></span>In Library';
+      renderIcons(button);
     });
   });
 
@@ -658,11 +667,11 @@ export function XFeedView(root) {
     button.textContent = 'Removing...';
     try {
       const result = await api.removeXFeedItem(tweetId);
-      toast(result.removed ? 'Removed from X Feed' : 'That item was already removed');
+      toast(result.removed ? 'Removed from Radar' : 'That item was already removed');
     } catch (err) {
       items = previousItems;
       renderFeed();
-      actionError = err.payload?.userMessage || err.message || 'Could not remove X Feed item';
+      actionError = err.payload?.userMessage || err.message || 'Could not remove Radar item';
       renderStatus();
       toast(actionError, 4200);
     } finally {
@@ -682,7 +691,7 @@ export function XFeedView(root) {
     timer = null;
   }
 
-  refresh().catch((err) => toast(err.message || 'Could not load X Feed'));
+  refresh().catch((err) => { if (err.name !== 'AbortError') toast(err.message || 'Could not load Radar'); });
 
   return {
     onShow() {
@@ -691,6 +700,7 @@ export function XFeedView(root) {
     },
     onHide() {
       stopPolling();
+      refreshController?.abort();
     },
     refresh,
   };

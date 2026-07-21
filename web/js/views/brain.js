@@ -1,4 +1,4 @@
-// Xtreme Brain command center: topic spaces, memory cards, and friendly workflows.
+// Topic workspace: source spaces, memory cards, and guided workflows.
 
 import { api, fmtNumber, fmtRelativeTime } from '../api.js';
 import { renderIcons } from '../icons.js';
@@ -32,7 +32,7 @@ const WORKFLOW_TOASTS = {
   watch: 'Updating watchlists...',
   review: 'Reviewing weak spots...',
   repair: 'Repairing memory indexes...',
-  publish: 'Updating Brain pages...',
+  publish: 'Updating topic pages...',
 };
 
 export function BrainView(root) {
@@ -44,14 +44,16 @@ export function BrainView(root) {
     projects: [],
     busyWorkflow: null,
   };
+  let loadVersion = 0;
+  let detailVersion = 0;
 
   root.innerHTML = `
     <div class="brain brain-friendly brain-x">
       <header class="brain-header brain-hero brain-command">
         <div>
-          <div class="brain-kicker">Xtreme Brain</div>
+          <div class="brain-kicker">Topic workspace</div>
           <h1 class="display">Make your saves usable.</h1>
-          <p class="brain-subtitle">Capture bookmarks, X Feed items, notes, repos, and updates into topic spaces with citations, connections, and simple workflows.</p>
+          <p class="brain-subtitle">Capture bookmarks, Radar items, notes, repos, and updates into topic spaces with citations and connections.</p>
         </div>
         <div class="brain-hero-actions">
           <div class="brain-ai-status" id="brain-ai-status">
@@ -83,9 +85,9 @@ export function BrainView(root) {
         <div class="notepad">
           <input type="text" class="input notepad-title" id="notepad-title" placeholder="Optional title">
           <input type="text" class="input" id="notepad-tags" placeholder="Tags, people, repos, or topics">
-          <textarea class="notepad-textarea" id="notepad-text" placeholder="What should the Brain remember?" rows="4"></textarea>
+          <textarea class="notepad-textarea" id="notepad-text" placeholder="What should this topic remember?" rows="4"></textarea>
           <div class="notepad-actions">
-            <button class="btn btn-primary" id="notepad-add-to-brain"><span data-icon="brain-circuit"></span>Save to Brain</button>
+            <button class="btn btn-primary" id="notepad-add-to-brain"><span data-icon="brain-circuit"></span>Save to Topics</button>
             <button class="btn btn-ghost" id="notepad-clear">Clear</button>
           </div>
         </div>
@@ -145,7 +147,7 @@ export function BrainView(root) {
   function labelAgent(agentType) {
     if (agentType === 'repo_watcher') return 'Project update';
     if (agentType === 'research_scout') return 'New discovery';
-    if (agentType === 'memory_curator') return 'Brain review';
+    if (agentType === 'memory_curator') return 'Topic review';
     return 'Update';
   }
 
@@ -259,7 +261,7 @@ export function BrainView(root) {
           ? 'Review open updates and weak spots before they get buried.'
           : stale.length > 0
             ? 'Some topics need a fresh watchlist update.'
-            : 'Your Brain has source-backed memory and is ready to ask.';
+            : 'Your topics have source-backed memory and are ready to ask.';
     $('#brain-next-step', root).innerHTML = `
       <span data-icon="${spaces.length === 0 ? 'arrow-up-right' : findings.length > 0 ? 'bell' : 'check-circle-2'}"></span>
       <span>${escape(nextStep)}</span>
@@ -313,6 +315,7 @@ export function BrainView(root) {
   }
 
   async function loadDetail() {
+    const version = ++detailVersion;
     const topic = topicById(state.selectedTopicId);
     if (!topic) {
       $('#brain-detail', root).innerHTML = '<div class="brain-empty compact"><span data-icon="mouse-pointer-2"></span><strong>Choose a topic</strong><p>Your memory cards, bookmarks, and watched projects will appear here.</p></div>';
@@ -326,6 +329,7 @@ export function BrainView(root) {
         api.brainSpaceBookmarks(topic.id),
         api.brainSpaceRepos(topic.id),
       ]);
+      if (version !== detailVersion || state.selectedTopicId !== topic.id) return;
       state.bookmarks = bookmarks || [];
       state.projects = repos || [];
       renderDetail(topic);
@@ -438,15 +442,15 @@ export function BrainView(root) {
   async function runWorkflow(workflow, target = 'all', showToast = true) {
     if (!workflow || state.busyWorkflow) return;
     state.busyWorkflow = workflow;
-    if (showToast) toast(WORKFLOW_TOASTS[workflow] || 'Running Brain workflow...', 4000);
+    if (showToast) toast(WORKFLOW_TOASTS[workflow] || 'Running topic workflow...', 4000);
     renderDashboard();
     try {
       const result = await api.runBrainWorkflow(workflow, target);
-      toast(result.summary || 'Brain workflow finished', 3500);
+      toast(result.summary || 'Topic workflow finished', 3500);
       await load();
       if (state.selectedTopicId) await loadDetail();
     } catch (err) {
-      toast(`Brain workflow failed: ${err.message}`);
+      toast(`Topic workflow failed: ${err.message}`);
     } finally {
       state.busyWorkflow = null;
       renderDashboard();
@@ -483,7 +487,7 @@ export function BrainView(root) {
         titleInput.value = '';
         textInput.value = '';
         tagsInput.value = '';
-        toast('Saved to Brain');
+        toast('Saved to Topics');
         await load();
       } catch (err) {
         toast(`Could not save note: ${err.message}`);
@@ -492,11 +496,13 @@ export function BrainView(root) {
   }
 
   async function load() {
+    const version = ++loadVersion;
     try {
       const [dashboard, engine] = await Promise.all([
         api.brainDashboard(),
         api.brainEngine().catch(() => null),
       ]);
+      if (version !== loadVersion) return;
       state.dashboard = dashboard;
       state.engine = engine;
       if (!state.selectedTopicId && dashboard.spaces?.length) state.selectedTopicId = dashboard.spaces[0].id;
@@ -549,7 +555,7 @@ export function BrainView(root) {
       loaded = true;
       load();
     },
-    onHide() {},
+    onHide() { loadVersion += 1; detailVersion += 1; },
     onKey() {},
   };
 }

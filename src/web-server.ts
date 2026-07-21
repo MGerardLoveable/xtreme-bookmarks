@@ -6,19 +6,24 @@ import { exec } from 'node:child_process';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import type { Database } from 'sql.js';
-import { openDb, saveDb } from './db.js';
-import { twitterBookmarksIndexPath, mdDir } from './paths.js';
+import { backupDb, databaseIntegrity, listDbBackups, openDb, saveDb } from './db.js';
+import { twitterBookmarksIndexPath, mdDir, twitterBookmarksCachePath, twitterBackfillStatePath } from './paths.js';
 import { deleteTwitterBookmark, syncTwitterBookmarks } from './bookmarks.js';
-import { syncBookmarksGraphQL } from './graphql-bookmarks.js';
-import { buildIndex, updateBookmarkWikiStatus, ensureMigrations } from './bookmarks-db.js';
-import { twitterBookmarksCachePath } from './paths.js';
-import { readJsonLines, writeJsonLines } from './fs.js';
+import { syncBookmarksGraphQL, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
+import { buildIndex, updateIndexIncrementally, updateBookmarkWikiStatus, ensureMigrations } from './bookmarks-db.js';
+import { readJson, readJsonLines, writeJsonLines } from './fs.js';
 import { browserUserDataDir, getBrowser, listBrowserIds } from './browsers.js';
 import { addBookmarkToWiki, compileMd } from './md.js';
 import { consolidateMemoryTiers, getMemoryTierStats } from './memory-tier.js';
 import { getGraphStats, exportGraphAsMermaid, loadGraph } from './graph.js';
 import { runMaintenanceAgent, exportHealthReportAsJson } from './agents.js';
 import { askMd } from './md-ask.js';
+import {
+  listKnowledgeAnnotationsFromDb,
+  listKnowledgeItemsFromDb,
+  listKnowledgeTopicsFromDb,
+  retrieveKnowledgeEvidenceFromDb,
+} from './knowledge-service.js';
 import { detectAvailableEngines, getGrokOauthStatus } from './engine.js';
 import { loadPreferences } from './preferences.js';
 import { loadEnv } from './config.js';
@@ -89,6 +94,42 @@ let activeAuthFlow: {
   url: string;
 } | null = null;
 
+const WEB_GRAB_MAX_PAGES = 1_000;
+const WEB_GRAB_MAX_MINUTES = 60;
+const WEB_GRAB_PAGE_SIZE = 100;
+const WEB_GRAB_CHECKPOINT_EVERY = 5;
+
+type WebBackfillState = {
+  stopReason?: string;
+  lastCursor?: string;
+};
+
+type WebRuntimeState = {
+  db: Database;
+  dbReloading?: boolean;
+  grabRunning?: boolean;
+  grabStartedAt?: string;
+  lastGrabSucceededAt?: string;
+  lastGrabError?: string;
+  lastGrabProgress?: SyncProgress;
+};
+
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super(`Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes.`);
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+const RESUMABLE_WEB_GRAB_REASONS = new Set([
+  'checkpoint',
+  'max pages reached',
+  'max runtime reached',
+  'unknown',
+]);
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function resolveWebDir(): string {
@@ -129,13 +170,56 @@ function sendJson(res: http.ServerResponse, data: unknown, status = 200): void {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'no-store',
   });
   res.end(body);
 }
 
 function sendError(res: http.ServerResponse, message: string, status = 500): void {
   sendJson(res, { error: message }, status);
+}
+
+async function loadWebBackfillState(): Promise<WebBackfillState | undefined> {
+  try {
+    return await readJson<WebBackfillState>(twitterBackfillStatePath());
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildWebGrabSyncOptions(
+  browser: string | undefined,
+  onProgress?: (status: SyncProgress) => void,
+  mode: 'quick' | 'backfill' = 'quick',
+): Promise<SyncOptions> {
+  const backfillState = await loadWebBackfillState();
+  return resolveWebGrabSyncOptions(backfillState, browser, onProgress, mode);
+}
+
+export function resolveWebGrabSyncOptions(
+  backfillState: WebBackfillState | undefined,
+  browser: string | undefined,
+  onProgress?: (status: SyncProgress) => void,
+  mode: 'quick' | 'backfill' = 'quick',
+): SyncOptions {
+  const resumeCursor =
+    backfillState?.lastCursor && RESUMABLE_WEB_GRAB_REASONS.has(backfillState?.stopReason ?? 'unknown')
+      ? backfillState.lastCursor
+      : undefined;
+  const isBackfill = mode === 'backfill';
+
+  return {
+    incremental: !isBackfill,
+    resumeCursor: isBackfill ? resumeCursor : undefined,
+    stalePageLimit: isBackfill ? Infinity : undefined,
+    maxPages: WEB_GRAB_MAX_PAGES,
+    pageSize: WEB_GRAB_PAGE_SIZE,
+    checkpointEvery: WEB_GRAB_CHECKPOINT_EVERY,
+    delayMs: 600,
+    maxMinutes: WEB_GRAB_MAX_MINUTES,
+    browser,
+    onProgress,
+  };
 }
 
 function sendXApiError(res: http.ServerResponse, err: unknown): boolean {
@@ -154,7 +238,16 @@ function sendXApiError(res: http.ServerResponse, err: unknown): boolean {
 function parseBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let received = 0;
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > MAX_REQUEST_BODY_BYTES) {
+        reject(new BodyTooLargeError());
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
     req.on('error', reject);
   });
@@ -347,6 +440,11 @@ function isCookieReadFailure(err: unknown): boolean {
   return /Cookies database|cookie extraction|No ct0 CSRF cookie|resource busy|locked|EBUSY/i.test(message);
 }
 
+function isBrowserSessionFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return isCookieReadFailure(err) || /GraphQL Bookmarks API returned (401|403)|X session may have expired/i.test(message);
+}
+
 function installedBrowserIds(): string[] {
   const preferred = ['chrome', 'edge', 'brave', 'comet', 'chromium', 'firefox'];
   const ids = preferred.filter(id => listBrowserIds().includes(id));
@@ -406,11 +504,23 @@ async function handleOAuthCallback(reqUrl: URL, res: http.ServerResponse): Promi
   }
 }
 
-async function rebuildIndexAndReload(dbPath: string, state?: { db: Database }): Promise<void> {
-  await buildIndex();
+async function rebuildIndexAndReload(
+  dbPath: string,
+  state?: WebRuntimeState,
+  incremental = false,
+): Promise<void> {
   if (state) {
+    state.dbReloading = true;
     state.db.close();
-    state.db = await openDb(dbPath);
+  }
+  try {
+    if (incremental) await updateIndexIncrementally();
+    else await buildIndex();
+  } finally {
+    if (state) {
+      state.db = await openDb(dbPath);
+      state.dbReloading = false;
+    }
   }
 }
 
@@ -448,6 +558,7 @@ interface Filters {
   domain?: string;
   collection?: string;
   after?: string;
+  capturedAfter?: string;
   before?: string;
   sort?: string;
   limit?: number;
@@ -501,7 +612,7 @@ function requestWebAuth(res: http.ServerResponse): void {
   res.end(JSON.stringify({ error: 'Authentication required' }));
 }
 
-function buildWhere(filters: Filters): { where: string; params: (string | number)[] } {
+export function buildWhere(filters: Filters): { where: string; params: (string | number)[] } {
   const conds: string[] = [];
   const params: (string | number)[] = [];
 
@@ -528,6 +639,10 @@ function buildWhere(filters: Filters): { where: string; params: (string | number
   if (filters.after) {
     conds.push(`COALESCE(b.posted_at, b.bookmarked_at) >= ?`);
     params.push(filters.after);
+  }
+  if (filters.capturedAfter) {
+    conds.push(`b.synced_at >= ?`);
+    params.push(filters.capturedAfter);
   }
   if (filters.before) {
     conds.push(`COALESCE(b.posted_at, b.bookmarked_at) <= ?`);
@@ -577,6 +692,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     domain: params.get('domain') || undefined,
     collection: params.get('collection') || undefined,
     after: params.get('after') || undefined,
+    capturedAfter: params.get('capturedAfter') || undefined,
     before: params.get('before') || undefined,
     sort: params.get('sort') || 'desc',
     limit: Math.min(Number(params.get('limit')) || 30, 100),
@@ -737,9 +853,73 @@ async function handleApi(
   res: http.ServerResponse,
   url: URL,
   pathname: string,
-  state?: { db: Database },
+  state?: WebRuntimeState,
 ): Promise<void> {
   try {
+    if (req.method === 'GET' && pathname === '/api/system/status') {
+      const integrity = databaseIntegrity(db);
+      sendJson(res, {
+        ok: integrity.ok && !state?.dbReloading,
+        database: integrity,
+        backups: listDbBackups(dbPath).length,
+        sync: {
+          running: Boolean(state?.grabRunning),
+          startedAt: state?.grabStartedAt || null,
+          lastSucceededAt: state?.lastGrabSucceededAt || null,
+          lastError: state?.lastGrabError || null,
+          progress: state?.lastGrabProgress || null,
+        },
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/system/backups') {
+      sendJson(res, { backups: listDbBackups(dbPath) });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/system/backups') {
+      saveDb(db, dbPath);
+      const backup = backupDb(dbPath, 'manual');
+      sendJson(res, { backup }, 201);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/topics') {
+      sendJson(res, { topics: listKnowledgeTopicsFromDb(db) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/items') {
+      const rawLimit = Number(url.searchParams.get('limit')) || 100;
+      sendJson(res, {
+        items: listKnowledgeItemsFromDb(db, {
+          topicId: url.searchParams.get('topicId'),
+          limit: Math.max(1, Math.min(rawLimit, 500)),
+        }),
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/annotations') {
+      sendJson(res, { annotations: listKnowledgeAnnotationsFromDb(db, url.searchParams.get('itemId') || undefined) });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/evidence') {
+      const query = (url.searchParams.get('q') || '').trim();
+      if (!query) {
+        sendError(res, 'Query is required.', 400);
+        return;
+      }
+      sendJson(res, {
+        evidence: retrieveKnowledgeEvidenceFromDb(db, query, {
+          topicId: url.searchParams.get('topicId'),
+          limit: Number(url.searchParams.get('limit')) || 30,
+        }),
+      });
+      return;
+    }
 
     // ── Ideas / Quick Notepad API ─────────────────────────────────────────────
     if (req.method === 'GET' && pathname === '/api/ideas') {
@@ -1216,7 +1396,7 @@ async function handleApi(
       const links = bm.links as string[] | undefined;
       const linksHtml = (links || []).map((l: string) => `<li><a href="${esc(l)}">${esc(l)}</a></li>`).join('\n');
       const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bookmark - ${esc(String(bm.authorHandle || 'Unknown'))}</title><style>body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }.author { font-weight: bold; font-size: 1.2rem; }.text { margin: 1rem 0; white-space: pre-wrap; }.meta { color: #666; font-size: 0.9rem; }a { color: #1d9bf0; }</style></head><body><div class="author">${esc(String(bm.authorName || ''))} (@${esc(String(bm.authorHandle || ''))})</div><div class="text">${esc(String(bm.text || ''))}</div>${linksHtml ? `<ul>${linksHtml}</ul>` : ''}<div class="meta"><p>Posted: ${esc(String(bm.postedAt || 'N/A'))}</p><p>Bookmarked: ${esc(String(bm.bookmarkedAt || 'N/A'))}</p><p>URL: <a href="${esc(String(bm.url || ''))}">${esc(String(bm.url || 'N/A'))}</a></p></div></body></html>`;
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
       return;
     }
@@ -1257,12 +1437,41 @@ async function handleApi(
         sendError(res, err instanceof Error ? err.message : String(err), 500);
       }
       return;
-    }
+      }
 
     if (req.method === 'POST' && pathname === '/api/grab') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
-      const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      send('status', { stage: 'syncing', message: 'Grabbing new bookmarks from X...' });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+      let clientClosed = false;
+      const abortController = new AbortController();
+      res.on('close', () => {
+        clientClosed = true;
+        abortController.abort();
+      });
+      const send = (event: string, data: unknown) => {
+        if (clientClosed || res.destroyed || res.writableEnded) return false;
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        return true;
+      };
+
+      if (state?.grabRunning) {
+        send('error', {
+          code: 'grab_in_progress',
+          message: 'A bookmark grab is already running. Keep this tab open and wait for it to finish.',
+          startedAt: state.grabStartedAt,
+          progress: state.lastGrabProgress,
+        });
+        res.end();
+        return;
+      }
+
+      if (state) {
+        state.grabRunning = true;
+        state.grabStartedAt = new Date().toISOString();
+        state.lastGrabProgress = undefined;
+      }
+
+      const grabMode = url.searchParams.get('mode') === 'backfill' ? 'backfill' : 'quick';
+      send('status', { stage: 'syncing', message: grabMode === 'backfill' ? 'Continuing bookmark backfill from X...' : 'Grabbing latest bookmarks from X...' });
       try {
         let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
         let lastBrowserError: unknown;
@@ -1271,10 +1480,14 @@ async function handleApi(
           const browser = getBrowser(browserId);
           send('status', { stage: 'syncing', message: `Trying ${browser.displayName} session...` });
           try {
-            syncResult = await syncBookmarksGraphQL({ incremental: true, maxPages: 50, delayMs: 600, maxMinutes: 5, browser: browserId, onProgress: (s) => send('progress', s) });
+            const options = await buildWebGrabSyncOptions(browserId, (s) => {
+              if (state) state.lastGrabProgress = s;
+              send('progress', s);
+            }, grabMode);
+            syncResult = await syncBookmarksGraphQL({ ...options, abortSignal: abortController.signal });
             break;
           } catch (browserErr) {
-            if (!isCookieReadFailure(browserErr)) throw browserErr;
+            if (!isBrowserSessionFailure(browserErr)) throw browserErr;
             lastBrowserError = browserErr;
           }
         }
@@ -1285,8 +1498,12 @@ async function handleApi(
             const apiResult = await syncTwitterBookmarks('incremental', { targetAdds: 50 });
             send('progress', { added: apiResult.added, newAdded: apiResult.added, totalFetched: apiResult.totalBookmarks, running: false, done: true, stopReason: 'oauth api fallback' });
             send('status', { stage: apiResult.added > 0 ? 'indexing' : 'complete', message: apiResult.added > 0 ? 'Indexing...' : 'Done.' });
-            if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state);
+            if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state, true);
             send('done', { ...apiResult, provider: 'x-api', stopReason: 'oauth api fallback' });
+            if (state) {
+              state.lastGrabSucceededAt = new Date().toISOString();
+              state.lastGrabError = undefined;
+            }
             res.end();
             return;
           } catch (apiErr) {
@@ -1309,7 +1526,7 @@ async function handleApi(
               : `Could not sync from any installed browser session.\n\n` +
                 `Last browser error: ${browserMessage}\n\n` +
                 `OAuth fallback also failed: ${apiMessage}\n\n` +
-                'Fix: log into X in Brave/Comet, close Chrome/Edge completely and retry, or run: node bin/ft.mjs auth'
+                'Safari is not supported as a cookie source. Fix: log into X in Chrome, Brave, Comet, Edge, Chromium, or Firefox and retry, or run: xb auth'
             );
             (error as Error & { authUrl?: string }).authUrl = authUrl;
             throw error;
@@ -1318,15 +1535,30 @@ async function handleApi(
 
         const shouldRebuild = syncResult.added > 0 || syncResult.bookmarkedAtRepaired > 0;
         send('status', { stage: shouldRebuild ? 'indexing' : 'complete', message: shouldRebuild ? 'Indexing...' : 'Done.' });
-        if (shouldRebuild) await rebuildIndexAndReload(dbPath, state);
+        if (shouldRebuild) {
+          await rebuildIndexAndReload(dbPath, state, syncResult.bookmarkedAtRepaired === 0);
+        }
         send('done', syncResult);
-      } catch (err) { send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl }); }
-      res.end();
+        if (state) {
+          state.lastGrabSucceededAt = new Date().toISOString();
+          state.lastGrabError = undefined;
+        }
+      } catch (err) {
+        if (state) state.lastGrabError = (err as Error).message;
+        send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl });
+      }
+      finally {
+        if (state) {
+          state.grabRunning = false;
+          state.grabStartedAt = undefined;
+        }
+        if (!res.writableEnded) res.end();
+      }
       return;
     }
 
     if (req.method === 'POST' && pathname === '/api/wiki') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       send('status', { stage: 'compiling', message: 'Building knowledge base...' });
       try {
@@ -1947,7 +2179,6 @@ async function handleApi(
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
       });
       const send = (event: string, data: unknown) =>
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -1974,7 +2205,9 @@ async function handleApi(
     sendError(res, 'Not found', 404);
   } catch (err) {
     const msg = (err as Error).message;
-    if (msg.includes('fts5') || msg.includes('MATCH')) { sendError(res, 'Invalid search query.', 400); } else { console.error('API error:', err); sendError(res, msg, 500); }
+    if (err instanceof BodyTooLargeError) sendError(res, msg, 413);
+    else if (msg.includes('fts5') || msg.includes('MATCH')) sendError(res, 'Invalid search query.', 400);
+    else { console.error('API error:', err); sendError(res, msg, 500); }
   }
 }
 
@@ -1989,14 +2222,26 @@ function openBrowser(url: string): void {
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
-async function autoGrab(state: { db: Database }, dbPath: string): Promise<void> {
+async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
   const ts = new Date().toLocaleTimeString();
+  if (state.grabRunning) return;
+  state.grabRunning = true;
+  state.grabStartedAt = new Date().toISOString();
   try {
     const syncResult = await syncBookmarksGraphQL({ incremental: true, maxPages: 50, delayMs: 600, maxMinutes: 5 });
     if (syncResult.added > 0) {
-      await buildIndex(); state.db.close(); state.db = await openDb(dbPath);
+      await rebuildIndexAndReload(dbPath, state, true);
     }
-  } catch (err) { console.error(`  [${ts}] Auto-grab failed:`, (err as Error).message); }
+    state.lastGrabSucceededAt = new Date().toISOString();
+    state.lastGrabError = undefined;
+  } catch (err) {
+    state.lastGrabError = (err as Error).message;
+    console.error(`  [${ts}] Auto-grab failed:`, state.lastGrabError);
+  }
+  finally {
+    state.grabRunning = false;
+    state.grabStartedAt = undefined;
+  }
 }
 
 async function autoUpdateXWatchlist(state: { db: Database }, dbPath: string): Promise<void> {
@@ -2007,9 +2252,14 @@ async function autoUpdateXWatchlist(state: { db: Database }, dbPath: string): Pr
 export async function startWebServer(port: number = 3848): Promise<void> {
   loadEnv();
   const auth = getWebAuthConfig();
+  const host = process.env.XTREME_BOOKMARKS_WEB_HOST || process.env.XB_WEB_HOST || '127.0.0.1';
+  const loopbackHosts = new Set(['127.0.0.1', '::1', 'localhost']);
+  if (!loopbackHosts.has(host.toLowerCase()) && !auth.enabled) {
+    throw new Error('Refusing to expose Xtreme Bookmarks beyond this computer without XB_WEB_PASSWORD.');
+  }
   const dbPath = twitterBookmarksIndexPath();
-  if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: ft sync && ft index'); process.exitCode = 1; return; }
-  const state = { db: await openDb(dbPath) };
+  if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: xb sync && xb index'); process.exitCode = 1; return; }
+  const state: WebRuntimeState = { db: await openDb(dbPath) };
   ensureMigrations(state.db);
   initBrainSchema(state.db);
   initXStreamSchema(state.db);
@@ -2030,18 +2280,50 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   });
 
   const webDir = resolveWebDir();
+  const resolvedWebDir = path.resolve(webDir);
+  const configuredOrigins = new Set(
+    (process.env.XB_CORS_ORIGINS || process.env.XTREME_BOOKMARKS_CORS_ORIGINS || '')
+      .split(',').map((origin) => origin.trim()).filter(Boolean),
+  );
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://localhost:${port}`);
+    const requestHost = req.headers.host || `${host}:${port}`;
+    let requestHostname = '';
+    try { requestHostname = new URL(`http://${requestHost}`).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { /* rejected below */ }
+    if (loopbackHosts.has(host.toLowerCase()) && !loopbackHosts.has(requestHostname)) {
+      sendError(res, 'Host is not allowed.', 403);
+      return;
+    }
+    const url = new URL(req.url || '/', `http://${requestHost}`);
     const pathname = url.pathname;
-    
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    const origin = String(req.headers.origin || '');
+    const sameOrigin = origin === `http://${requestHost}` || origin === `https://${requestHost}`;
+    const originAllowed = !origin || sameOrigin || configuredOrigins.has(origin);
+    if (!originAllowed) {
+      sendError(res, 'Origin is not allowed.', 403);
+      return;
+    }
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PUT, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     if (req.method === 'GET' && (pathname === '/healthz' || pathname === '/api/healthz')) {
-      sendJson(res, { ok: true, app: 'xtreme-bookmarks' });
+      const integrity = databaseIntegrity(state.db);
+      sendJson(res, {
+        ok: integrity.ok && !state.dbReloading,
+        app: 'xtreme-bookmarks',
+        database: integrity,
+        sync: {
+          running: Boolean(state.grabRunning),
+          startedAt: state.grabStartedAt || null,
+          lastSucceededAt: state.lastGrabSucceededAt || null,
+          lastError: state.lastGrabError || null,
+        },
+      }, integrity.ok && !state.dbReloading ? 200 : 503);
       return;
     }
 
@@ -2061,21 +2343,32 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     }
 
     try {
-      if (pathname.startsWith('/api/')) { await handleApi(state.db, dbPath, req, res, url, pathname, state); return; }
+      if (pathname.startsWith('/api/')) {
+        if (state.dbReloading) {
+          sendError(res, 'Bookmark index is refreshing. Try again in a moment.', 503);
+          return;
+        }
+        await handleApi(state.db, dbPath, req, res, url, pathname, state);
+        return;
+      }
 
       // Static
-      const filePath = pathname === '/' ? path.join(webDir, 'index.html') : path.join(webDir, pathname);
-      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      const requestedPath = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
+      const filePath = path.resolve(resolvedWebDir, requestedPath);
+      const isContained = filePath === resolvedWebDir || filePath.startsWith(`${resolvedWebDir}${path.sep}`);
+      if (isContained && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         const ext = path.extname(filePath);
         const headers: Record<string, string> = { 'Content-Type': getMimeType(ext) };
         if (['.html', '.js', '.css'].includes(ext)) headers['Cache-Control'] = 'no-store';
         res.writeHead(200, headers);
         res.end(fs.readFileSync(filePath));
       } else {
+        if (!isContained || path.extname(requestedPath)) {
+          sendError(res, 'Not found', 404);
+          return;
+        }
         const indexPath = path.join(webDir, 'index.html');
-        console.log(`[Static] Not found: ${filePath}. Trying fallback: ${indexPath}`);
         if (fs.existsSync(indexPath)) {
-          console.log(`[Static] Serving fallback index.html`);
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(fs.readFileSync(indexPath));
         } else {
@@ -2086,8 +2379,9 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     } catch (err) { console.error('Request error:', err); sendError(res, 'Internal server error', 500); }
   });
 
-  server.listen(port, () => {
-    const url = `http://localhost:${port}`;
+  server.listen(port, host, () => {
+    const displayHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
+    const url = `http://${displayHost}:${port}`;
     console.log(`\n  Xtreme Bookmarks 2nd Brain Web UI running at ${url}`);
     if (auth.enabled) console.log(`  Web access is password protected for user "${auth.username}".`);
     openBrowser(url);
@@ -2098,7 +2392,22 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   const brainInterval = setInterval(() => {
     runDueBrainAgents().catch((err) => console.error('  Brain agent watch failed:', (err as Error).message));
   }, 60 * 60 * 1000);
-  process.on('SIGINT', () => { clearInterval(grabInterval); if (xFeedInterval) clearInterval(xFeedInterval); clearInterval(brainInterval); stopXBrowserPoller(); state.db.close(); server.close(); process.exit(0); });
-  process.on('SIGTERM', () => { clearInterval(grabInterval); if (xFeedInterval) clearInterval(xFeedInterval); clearInterval(brainInterval); state.db.close(); server.close(); process.exit(0); });
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(grabInterval);
+    if (xFeedInterval) clearInterval(xFeedInterval);
+    clearInterval(brainInterval);
+    stopXBrowserPoller();
+    server.close(() => {
+      try { saveDb(state.db, dbPath); } catch (err) { console.error('  Final database save failed:', (err as Error).message); }
+      state.db.close();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
   return new Promise(() => {});
 }

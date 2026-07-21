@@ -6,12 +6,10 @@ import { $, $$, toast, debounce } from './util.js';
 
 import { LibraryView }     from './views/library.js';
 import { AskView }         from './views/ask.js';
-import { GraphView }       from './views/graph.js';
-import { BrainView }       from './views/brain.js';
+import { TopicsView }      from './views/topics.js';
 import { XFeedView }       from './views/xfeed.js';
-import { MaintenanceView } from './views/maintenance.js';
-import { InsightsView }    from './views/insights.js';
 import { openWiki, closeWiki, isWikiOpen } from './wiki.js';
+import { setupSettings, openSettings, closeSettings, isSettingsOpen } from './settings.js';
 
 const LS_THEME = 'xb.v2.theme';
 const LS_DENSITY = 'xb.v2.density';
@@ -41,23 +39,33 @@ function toggleDensity() {
 const views = {
   library: null,
   ask: null,
-  graph: null,
-  brain: null,
-  xfeed: null,
-  maintenance: null,
-  insights: null,
+  topics: null,
+  radar: null,
 };
 const viewFactories = {
   library: LibraryView,
   ask: AskView,
-  graph: GraphView,
-  brain: BrainView,
-  xfeed: XFeedView,
-  maintenance: MaintenanceView,
-  insights: InsightsView,
+  topics: TopicsView,
+  radar: XFeedView,
 };
 
+const ROUTE_ALIASES = {
+  brain: 'topics', graph: 'topics', insights: 'topics',
+  xfeed: 'radar', maintenance: 'library',
+};
+
+function routeFromHash() {
+  const raw = location.hash.match(/^#\/([^/?]+)/)?.[1] || '';
+  return ROUTE_ALIASES[raw] || (viewFactories[raw] ? raw : null);
+}
+
 let currentView = null;
+const grabState = {
+  running: false,
+  startedAt: 0,
+  message: '',
+  state: 'idle',
+};
 
 function mountView(name) {
   const root = document.querySelector(`.view[data-view="${name}"]`);
@@ -82,18 +90,28 @@ function unmountView(name) {
   }
 }
 
-function switchView(name) {
+function switchView(name, { updateHash = true } = {}) {
+  name = ROUTE_ALIASES[name] || name;
   if (!viewFactories[name]) name = 'library';
-  if (currentView === name) return;
+  if (currentView === name) {
+    views[name]?.onRoute?.();
+    return;
+  }
 
   if (currentView) unmountView(currentView);
 
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== name));
-  $$('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === name)));
+  $$('.tab').forEach((t) => {
+    const selected = t.dataset.view === name;
+    t.setAttribute('aria-selected', String(selected));
+    t.tabIndex = selected ? 0 : -1;
+  });
 
   currentView = name;
   localStorage.setItem(LS_VIEW, name);
   mountView(name);
+  document.title = `${name[0].toUpperCase()}${name.slice(1)} · Xtreme Bookmarks`;
+  if (updateHash && !location.hash.startsWith(`#/${name}`)) history.pushState(null, '', `#/${name}`);
 }
 
 // ── Status bar ──────────────────────────────────────────────────────────────
@@ -117,13 +135,13 @@ function commandItems() {
   return [
     { section: 'Navigation', title: 'Go to Library',     icon: 'library',        action: () => switchView('library') },
     { section: 'Navigation', title: 'Go to Ask',         icon: 'sparkles',       action: () => switchView('ask') },
-    { section: 'Navigation', title: 'Go to Graph',       icon: 'network',        action: () => switchView('graph') },
-    { section: 'Navigation', title: 'Go to Brain',       icon: 'brain-circuit',  action: () => switchView('brain') },
-    { section: 'Navigation', title: 'Go to X Feed',      icon: 'bell',           action: () => switchView('xfeed') },
-    { section: 'Navigation', title: 'Go to Maintenance', icon: 'shield-check',   action: () => switchView('maintenance') },
-    { section: 'Navigation', title: 'Go to Insights',    icon: 'bar-chart-3',    action: () => switchView('insights') },
+    { section: 'Navigation', title: 'Go to Topics',      icon: 'brain-circuit',  action: () => switchView('topics') },
+    { section: 'Navigation', title: 'Go to Topic Map',   icon: 'network',        action: () => { switchView('topics'); location.hash = '#/topics/map'; } },
+    { section: 'Navigation', title: 'Go to Topic Signals', icon: 'bar-chart-3',  action: () => { switchView('topics'); location.hash = '#/topics/signals'; } },
+    { section: 'Navigation', title: 'Go to Radar',       icon: 'bell',           action: () => switchView('radar') },
     { section: 'Actions',    title: 'Grab new bookmarks from X', icon: 'download-cloud', action: runGrab },
     { section: 'Actions',    title: 'Browse wiki',        icon: 'folder',        action: () => openWiki() },
+    { section: 'Actions',    title: 'Settings and health', icon: 'settings',     action: openSettings },
     { section: 'Actions',    title: 'Toggle theme',       icon: 'moon',          action: toggleTheme },
     { section: 'Actions',    title: 'Toggle density',     icon: 'rows-3',        action: toggleDensity },
     { section: 'Actions',    title: 'Keyboard shortcuts', icon: 'circle-help',   action: openHelp },
@@ -196,7 +214,9 @@ function renderPalette(items) {
       h.textContent = item.section;
       frag.appendChild(h);
     }
-    const node = document.createElement('div');
+    const node = document.createElement('button');
+    node.type = 'button';
+    node.setAttribute('role', 'option');
     node.className = 'palette-item' + (idx === paletteIndex ? ' active' : '');
     node.dataset.index = String(idx);
     node.innerHTML = `
@@ -229,10 +249,7 @@ function closePalette() {
   const overlay = $('#palette');
   if (!overlay) return;
   overlay.hidden = true;
-  // Release focus so subsequent `inField` checks don't mistake the hidden input for an active field.
-  if (document.activeElement && typeof document.activeElement.blur === 'function') {
-    document.activeElement.blur();
-  }
+  $('#palette-btn')?.focus();
 }
 function paletteExecute() {
   const item = paletteItems[paletteIndex];
@@ -253,38 +270,129 @@ function closeHelp() { $('#help-overlay').hidden = true; }
 function isHelpOpen() { const o = $('#help-overlay'); return o && !o.hidden; }
 
 // ── Grab (sync new bookmarks) ───────────────────────────────────────────────
+function setGrabStatus(state, message, progress = {}) {
+  grabState.state = state;
+  grabState.message = message || '';
+  if (state === 'starting' || state === 'syncing' || state === 'indexing') {
+    grabState.running = true;
+    if (!grabState.startedAt) grabState.startedAt = Date.now();
+  } else {
+    grabState.running = false;
+    grabState.startedAt = 0;
+  }
+
+  const btn = $('#grab-btn');
+  if (btn) {
+    const busy = grabState.running;
+    btn.disabled = busy;
+    btn.classList.toggle('is-syncing', busy);
+    btn.setAttribute('aria-busy', String(busy));
+    btn.title = busy ? message || 'Grab running' : 'Grab new bookmarks';
+    btn.setAttribute('aria-label', busy ? message || 'Grab running' : 'Grab new bookmarks');
+  }
+
+  const status = $('#status-grab');
+  const sep = document.querySelector('.status-grab-sep');
+  if (status) {
+    const show = state !== 'idle';
+    status.hidden = !show;
+    if (sep) sep.hidden = !show;
+    status.textContent = show ? message : '';
+    status.dataset.state = state;
+  }
+
+  window.__xbGrabStatus = { state, message, progress };
+  document.dispatchEvent(new CustomEvent('xb:grab-status', {
+    detail: { state, message, progress },
+  }));
+}
+
+function clearGrabStatusSoon() {
+  setTimeout(() => {
+    if (!grabState.running) setGrabStatus('idle', '');
+  }, 5000);
+}
+
+function grabErrorMessage(err) {
+  const message = err && err.message ? err.message : String(err || 'unknown');
+  if (/Failed to fetch|NetworkError|Load failed|Network request failed/i.test(message)) {
+    return 'Grab failed: local Xtreme Bookmarks server is offline. Restart the app server and refresh this page.';
+  }
+  return `Grab failed: ${message}`;
+}
+
 async function runGrab() {
-  toast('Grabbing new bookmarks…');
+  if (grabState.running) {
+    toast(grabState.message || 'Bookmark grab is already running.', 3000);
+    return;
+  }
+  setGrabStatus('starting', 'Starting bookmark grab...');
+  toast('Starting bookmark grab...');
   try {
     let addedCount = 0;
+    let lastProgressToastAt = 0;
     let openedAuthUrl = '';
+    let sawTerminalEvent = false;
     const openAuthUrl = (url) => {
       if (!url || openedAuthUrl === url) return;
       openedAuthUrl = url;
       window.open(url, '_blank', 'noopener');
     };
     await api.grabStream((event, data) => {
-      if (event === 'progress' && data && typeof data.added === 'number') addedCount = data.added;
+      if (event === 'done' || event === 'error' || event === 'cancelled') sawTerminalEvent = true;
+      if (event === 'progress' && data) {
+        if (typeof data.newAdded === 'number') addedCount = data.newAdded;
+        else if (typeof data.added === 'number') addedCount = data.added;
+        if (typeof data.totalFetched === 'number') {
+          const now = Date.now();
+          const page = typeof data.page === 'number' ? `Page ${fmtNumber(data.page)} · ` : '';
+          const reason = data.stopReason ? ` · ${data.stopReason}` : '';
+          const message = `${page}Scanned ${fmtNumber(data.totalFetched)} · ${fmtNumber(addedCount)} new${reason}`;
+          setGrabStatus(data.done ? 'indexing' : 'syncing', message, data);
+          if (data.done || now - lastProgressToastAt > 1500) {
+            toast(message, 3500);
+            lastProgressToastAt = now;
+          }
+        }
+      }
+      if (event === 'status' && data && data.message) {
+        const nextState = data.stage === 'indexing' ? 'indexing' : 'syncing';
+        setGrabStatus(nextState, data.message);
+        toast(data.message, 2500);
+      }
       if (event === 'done') {
-        toast(addedCount ? `Added ${addedCount} new bookmark${addedCount === 1 ? '' : 's'}` : 'No new bookmarks');
+        const doneAdded = typeof data?.added === 'number' ? data.added : addedCount;
+        const message = doneAdded ? `Added ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}` : `No new bookmarks · ${data?.stopReason || 'complete'}`;
+        setGrabStatus('done', message, data || {});
+        toast(message, 4500);
         refreshStatusBar();
         if (views.library && views.library.refresh) views.library.refresh();
+        clearGrabStatusSoon();
       }
       if (event === 'auth_required') {
         openAuthUrl(data && data.url);
+        setGrabStatus('error', (data && data.message) || 'Authorization required.');
         toast((data && data.message) || 'Authorize Xtreme Bookmarks with X, then press Grab again.', 8000);
       }
       if (event === 'error') {
         if (data && data.authUrl) {
           openAuthUrl(data.authUrl);
+          setGrabStatus('error', 'Authorization required. Approve X access, then press Grab again.');
           toast('Authorization required. Approve X access in the new tab, then press Grab again.', 8000);
         } else {
-          toast(`Grab failed: ${data && data.message ? data.message : 'unknown'}`);
+          const message = data && data.message ? data.message : 'unknown';
+          setGrabStatus('error', `Grab failed: ${message}`, data || {});
+          toast(`Grab failed: ${message}`, 8000);
         }
+        clearGrabStatusSoon();
       }
     });
+    if (!sawTerminalEvent) throw new Error('Grab stream ended before completion.');
   } catch (err) {
-    toast(`Grab failed: ${err.message}`);
+    const message = grabErrorMessage(err);
+    setGrabStatus('error', message);
+    toast(message, 8000);
+    clearGrabStatusSoon();
   }
 }
 
@@ -309,6 +417,7 @@ function onKeydown(e) {
     if (isPaletteOpen()) { closePalette(); closed = true; }
     if (isWikiOpen()) { closeWiki(); closed = true; }
     if (isHelpOpen()) { closeHelp(); closed = true; }
+    if (isSettingsOpen()) { closeSettings(); closed = true; }
     if (closed) return;
     const v = views[currentView];
     if (v && typeof v.onKey === 'function') v.onKey(e);
@@ -327,7 +436,7 @@ function onKeydown(e) {
   // Leader key `g`
   if (leaderPending) {
     const key = e.key.toLowerCase();
-    const map = { l: 'library', a: 'ask', g: 'graph', b: 'brain', x: 'xfeed', m: 'maintenance', i: 'insights' };
+    const map = { l: 'library', a: 'ask', t: 'topics', r: 'radar' };
     if (map[key]) {
       e.preventDefault();
       switchView(map[key]);
@@ -381,6 +490,17 @@ function boot() {
 
   // Tab clicks
   $$('.tab').forEach((t) => t.addEventListener('click', () => switchView(t.dataset.view)));
+  $('.tabs')?.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = $$('.tab');
+    let index = tabs.indexOf(document.activeElement);
+    if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = tabs.length - 1;
+    else index = (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[index].focus();
+    switchView(tabs[index].dataset.view);
+  });
 
   // Topbar buttons
   $('#grab-btn').addEventListener('click', runGrab);
@@ -388,6 +508,7 @@ function boot() {
   $('#density-btn').addEventListener('click', toggleDensity);
   $('#theme-btn').addEventListener('click', toggleTheme);
   $('#help-btn').addEventListener('click', openHelp);
+  setupSettings();
 
   // Delegated clicks for overlay close buttons and backdrops.
   // Event delegation survives any DOM re-render and handles the case where the
@@ -409,6 +530,12 @@ function boot() {
 
   // Global shortcuts
   document.addEventListener('keydown', onKeydown);
+  document.addEventListener('xb:navigate', (event) => {
+    const detail = event.detail || {};
+    closeSettings();
+    switchView(detail.view || 'library');
+    if (detail.filter && views.library?.applyFilter) views.library.applyFilter(detail.filter);
+  });
 
 
   // ── Global Notepad / Quick Capture ────────────────────────────────────────
@@ -485,16 +612,16 @@ function boot() {
       }
       addBtn.disabled = true;
       saveBtn.disabled = true;
-      setCaptureState('Adding to Brain...');
+        setCaptureState('Adding to Topics...');
       try {
         await api.createBrainNote({ title, text, tags });
         localStorage.removeItem('xb.global.notepad.draft');
-        toast('Added to Brain');
+        toast('Added to Topics');
         closeModal();
       } catch (err) {
         console.error(err);
         localStorage.setItem('xb.global.notepad.draft', JSON.stringify({ title, text, tags, savedAt: new Date().toISOString() }));
-        setCaptureState('Could not reach Brain. Draft saved locally.');
+        setCaptureState('Could not reach Topics. Draft saved locally.');
         toast('Draft saved locally');
       } finally {
         addBtn.disabled = false;
@@ -517,8 +644,9 @@ function boot() {
   setupGlobalNotepad();
 
   // Start
-  const saved = localStorage.getItem(LS_VIEW) || 'library';
-  switchView(saved);
+  const saved = routeFromHash() || localStorage.getItem(LS_VIEW) || 'library';
+  switchView(saved, { updateHash: !location.hash });
+  window.addEventListener('hashchange', () => switchView(routeFromHash() || 'library', { updateHash: false }));
   refreshStatusBar();
   setInterval(refreshStatusBar, 60_000);
 }

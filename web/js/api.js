@@ -18,14 +18,14 @@ async function req(path, opts = {}) {
 
 export const api = {
   // Bookmarks
-  listBookmarks(params = {}) {
+  listBookmarks(params = {}, options = {}) {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
     }
-    return req(`/api/bookmarks?${q.toString()}`);
+    return req(`/api/bookmarks?${q.toString()}`, { signal: options.signal });
   },
-  getBookmark(id) { return req(`/api/bookmarks/${encodeURIComponent(id)}`); },
+  getBookmark(id, options = {}) { return req(`/api/bookmarks/${encodeURIComponent(id)}`, { signal: options.signal }); },
   saveNote(id, note) {
     return req(`/api/bookmarks/${encodeURIComponent(id)}/note`, {
       method: 'POST',
@@ -85,6 +85,28 @@ export const api = {
   analytics() { return req('/api/analytics'); },
   duplicates() { return req('/api/duplicates'); },
   deadLinks() { return req('/api/dead-links'); },
+  systemStatus() { return req('/api/system/status'); },
+  systemBackups() { return req('/api/system/backups'); },
+  createSystemBackup() { return req('/api/system/backups', { method: 'POST' }); },
+
+  // Canonical knowledge model. These remain additive while legacy Brain routes migrate.
+  topics() { return req('/api/topics'); },
+  items(topicId = '', limit = 100) {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (topicId) q.set('topicId', topicId);
+    return req(`/api/items?${q.toString()}`);
+  },
+  annotations(itemId = '') {
+    const q = new URLSearchParams();
+    if (itemId) q.set('itemId', itemId);
+    return req(`/api/annotations?${q.toString()}`);
+  },
+  evidence(q = '', topicId = '', limit = 50) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (q) params.set('q', q);
+    if (topicId) params.set('topicId', topicId);
+    return req(`/api/evidence?${params.toString()}`);
+  },
 
   // Brain
   brainMemory() { return req('/api/brain/memory'); },
@@ -147,7 +169,7 @@ export const api = {
   brainAgentFindings(limit = 50, open = false) { return req(`/api/brain/agents/findings?limit=${encodeURIComponent(limit)}&open=${open ? 'true' : 'false'}`); },
 
   // X account monitor
-  xWatchlist() { return req('/api/x/watchlist'); },
+  xWatchlist(options = {}) { return req('/api/x/watchlist', { signal: options.signal }); },
   addXWatchAccount(handle, backfill = true) {
     return req('/api/x/watchlist', {
       method: 'POST',
@@ -175,10 +197,10 @@ export const api = {
     const suffix = q.toString() ? `?${q.toString()}` : '';
     return req(`/api/x/watchlist/backfill${suffix}`, { method: 'POST' });
   },
-  xFeed(limit = 50, type = 'all', account = '') {
+  xFeed(limit = 50, type = 'all', account = '', options = {}) {
     const q = new URLSearchParams({ limit: String(limit), type: String(type) });
     if (account) q.set('account', account);
-    return req(`/api/x/feed?${q.toString()}`);
+    return req(`/api/x/feed?${q.toString()}`, { signal: options.signal });
   },
   saveXFeedItemToBookmarks(tweetId) {
     return req(`/api/x/feed/${encodeURIComponent(tweetId)}/bookmark`, { method: 'POST' });
@@ -192,7 +214,7 @@ export const api = {
     const suffix = q.toString() ? `?${q.toString()}` : '';
     return req(`/api/x/feed${suffix}`, { method: 'DELETE' });
   },
-  xStreamStatus() { return req('/api/x/stream/status'); },
+  xStreamStatus(options = {}) { return req('/api/x/stream/status', { signal: options.signal }); },
   startXStream() { return req('/api/x/stream/start', { method: 'POST' }); },
   stopXStream() { return req('/api/x/stream/stop', { method: 'POST' }); },
   syncXStreamRule() { return req('/api/x/stream/rules/sync', { method: 'POST' }); },
@@ -222,6 +244,7 @@ async function streamPost(path, onEvent, body) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  let terminalEvent = false;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -236,9 +259,11 @@ async function streamPost(path, onEvent, body) {
         if (line.startsWith('event:')) event = line.slice(6).trim();
         else if (line.startsWith('data:')) data += line.slice(5).trim();
       }
+      if (event === 'done' || event === 'error' || event === 'cancelled') terminalEvent = true;
       try { onEvent(event, JSON.parse(data)); } catch { onEvent(event, data); }
     }
   }
+  if (!terminalEvent) throw new Error('Stream ended before completion.');
 }
 
 // Formatting helpers

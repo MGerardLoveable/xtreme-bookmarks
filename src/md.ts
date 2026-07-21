@@ -1,7 +1,7 @@
 /**
  * Markdown wiki compilation engine.
  *
- * ft md [--full]
+ * xb md [--full]
  *
  * Builds/updates a Karpathy-style LLM wiki from the bookmarks database.
  * Output lives in ~/.xtreme-bookmarks/md/ as plain markdown with [[wikilinks]],
@@ -138,7 +138,7 @@ Edit it to evolve how the LLM maintains wiki pages.
 ├── categories/       # Pages by bookmark type (tool, security, technique, …)
 ├── domains/          # Pages by subject matter (ai, finance, devops, …)
 ├── entities/         # Pages for individual authors/contributors
-└── concepts/         # Q&A answers saved with ft ask --save
+└── concepts/         # Q&A answers saved with xb ask --save
 \`\`\`
 
 ## Frontmatter Requirements
@@ -245,7 +245,7 @@ export async function compileMd(options: CompileOptions = {}): Promise<CompileRe
     let alive = false;
     try { process.kill(Number(existingPid), 0); alive = true; } catch { /* not running */ }
     if (alive) {
-      throw new Error(`Another ft md is already running (pid ${existingPid}). Wait for it to finish or remove ${lockPath}`);
+      throw new Error(`Another xb md is already running (pid ${existingPid}). Wait for it to finish or remove ${lockPath}`);
     }
     // Stale lock from a crashed run — take over
     fs.writeFileSync(lockPath, String(process.pid));

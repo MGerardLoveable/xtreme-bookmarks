@@ -88,6 +88,17 @@
   transition: background var(--t-fast), color var(--t-fast);
 }
 .icon-btn:hover { background: var(--surface-hover); color: var(--fg); }
+.icon-btn:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+.icon-btn.is-syncing {
+  color: var(--brand);
+  background: var(--surface-hover);
+}
+.icon-btn.is-syncing svg {
+  animation: spin 900ms linear infinite;
+}
 
 /* Cards */
 .card {
@@ -200,6 +211,44 @@
 @keyframes toast-out {
   from { opacity: 1; transform: translate(-50%, 0); }
   to   { opacity: 0; transform: translate(-50%, 8px); }
+}
+
+.library-grab-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin: 8px 0 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.library-grab-status[hidden] { display: none; }
+.library-grab-status[data-state="error"] {
+  border-color: rgba(185, 28, 28, 0.36);
+  color: #b91c1c;
+}
+.library-grab-status[data-state="done"] {
+  border-color: rgba(22, 101, 52, 0.34);
+  color: #166534;
+}
+.library-grab-spinner {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: currentcolor;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+.library-grab-status[data-state="done"] .library-grab-spinner,
+.library-grab-status[data-state="error"] .library-grab-spinner {
+  animation: none;
+  border-color: currentcolor;
 }
 
 /* Command palette */

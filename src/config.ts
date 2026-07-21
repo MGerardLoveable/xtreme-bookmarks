@@ -5,6 +5,13 @@ import { dataDir } from './paths.js';
 import { getBrowser, browserUserDataDir, detectBrowser, listBrowserIds } from './browsers.js';
 import type { BrowserDef } from './browsers.js';
 
+interface LoadedEnvironmentValue {
+  previous: string | undefined;
+  loaded: string;
+}
+
+const loadedEnvironment = new Map<string, LoadedEnvironmentValue>();
+
 export interface ChromeSessionConfig {
   chromeUserDataDir: string;
   chromeProfileDirectory: string;
@@ -12,17 +19,34 @@ export interface ChromeSessionConfig {
 }
 
 export function loadEnv(): void {
+  restoreLoadedEnvironment();
   const dir = dataDir();
-  const candidatePaths = [
-    path.join(process.cwd(), '.env.local'),
-    path.join(process.cwd(), '.env'),
-    path.join(dir, '.env.local'),
-    path.join(dir, '.env'),
-  ];
+  const values: Record<string, string> = {};
+  loadDotenv({
+    path: [
+      path.join(dir, '.env.local'),
+      path.join(dir, '.env'),
+      path.join(process.cwd(), '.env.local'),
+      path.join(process.cwd(), '.env'),
+    ],
+    processEnv: values,
+    quiet: true,
+  });
 
-  for (const envPath of candidatePaths) {
-    loadDotenv({ path: envPath, quiet: true });
+  for (const [key, value] of Object.entries(values)) {
+    if (process.env[key] !== undefined) continue;
+    loadedEnvironment.set(key, { previous: process.env[key], loaded: value });
+    process.env[key] = value;
   }
+}
+
+function restoreLoadedEnvironment(): void {
+  for (const [key, { previous, loaded }] of loadedEnvironment) {
+    if (process.env[key] !== loaded) continue;
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+  loadedEnvironment.clear();
 }
 
 export function loadChromeSessionConfig(overrides: { browserId?: string } = {}): ChromeSessionConfig {

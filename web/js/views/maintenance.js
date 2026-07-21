@@ -55,6 +55,7 @@ export function MaintenanceView(root) {
     try {
       const res = await api.duplicates();
       const groups = [
+        ...(res.groups || []).map((g) => ({ ...g, type: g.type || 'duplicate' })),
         ...(res.textGroups || []).map((g) => ({ ...g, type: 'similar_text' })),
         ...(res.linkGroups || []).map((g) => ({ ...g, type: 'same_link' })),
       ];
@@ -72,6 +73,7 @@ export function MaintenanceView(root) {
             <div style="display:flex;gap:6px;flex-wrap:wrap">
               <span class="chip">${g.type === 'similar_text' ? 'Similar text' : 'Same link'}</span>
               <span class="chip">${g.ids?.length || 0} items</span>
+              <button class="btn btn-sm btn-ghost" data-maint-search="${escape(g.preview || g.sample_url || '')}">Review</button>
             </div>
           </div>
         `).join('')}
@@ -80,6 +82,12 @@ export function MaintenanceView(root) {
       $('#dupes-body', root).innerHTML = `<div class="placeholder">Failed: ${escape(err.message)}</div>`;
     }
   }
+
+  root.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-maint-search]');
+    if (!button) return;
+    document.dispatchEvent(new CustomEvent('xb:navigate', { detail: { view: 'library', filter: { q: button.dataset.maintSearch } } }));
+  });
 
   async function loadDead() {
     $('#dead-body', root).innerHTML = '<div class="placeholder">Loading…</div>';
@@ -116,7 +124,8 @@ export function MaintenanceView(root) {
   async function runDeadCheck() {
     toast('Checking links…');
     try {
-      await fetch('/api/check-links', { method: 'POST' });
+      const response = await fetch('/api/check-links', { method: 'POST' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       toast('Link check complete');
       loadDead();
     } catch (err) { toast(`Failed: ${err.message}`); }

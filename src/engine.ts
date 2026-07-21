@@ -212,7 +212,7 @@ export async function resolveEngine(options: ResolveEngineOptions = {}): Promise
     const yes = await askYesNo(`  Use ${name} for classification? (y/n): `);
     if (yes) {
       savePreferences({ ...prefs, defaultEngine: name });
-      process.stderr.write(`  \u2713 ${name} set as default (change anytime: ft model)\n`);
+      process.stderr.write(`  \u2713 ${name} set as default (change anytime: xb model)\n`);
       return resolve(name);
     }
   }
