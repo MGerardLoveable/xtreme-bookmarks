@@ -1,7 +1,7 @@
 import { api, fmtNumber, fmtRelativeTime, fmtDate } from './api.js';
 import { MaintenanceView } from './views/maintenance.js';
 import { renderIcons } from './icons.js';
-import { toast } from './util.js';
+import { escape, toast } from './util.js';
 
 let maintenance = null;
 let returnFocus = null;
@@ -27,7 +27,7 @@ async function refreshSummary() {
       <div><strong>${fmtNumber(stats.totalBookmarks)}</strong><small>bookmarks</small></div>
       <div><strong>${lastSync}</strong><small>last sync</small></div>
       <div><strong>${fmtNumber(system.backups ?? backups.backups?.length ?? 0)}</strong><small>backups</small></div>
-      ${sync.lastError ? `<p class="settings-sync-error">${sync.lastError}</p>` : ''}`;
+      ${sync.lastError ? `<p class="settings-sync-error">${escape(sync.lastError)}</p>` : ''}`;
     renderBackups(backups.backups || []);
   } catch {
     node.innerHTML = '<div class="health-pill bad"><span></span>Local server unavailable</div><p>Restart Xtreme Bookmarks, then refresh this page.</p>';

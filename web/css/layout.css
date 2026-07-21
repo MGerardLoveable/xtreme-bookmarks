@@ -164,7 +164,7 @@ body {
   }
   .tab .tab-label, .tab[aria-selected="true"] .tab-label { display: inline; font-size: 10px; }
   .tab[aria-selected="true"] { color: var(--brand); }
-  .tab[aria-selected="true"] [data-icon] svg { stroke: currentColor; }
+  .tab[aria-selected="true"] [data-icon] svg { stroke: currentcolor; }
   .topbar-right { gap: 0; }
   #density-btn, #help-btn { display: none; }
   .topbar .icon-btn { width: 38px; height: 38px; }

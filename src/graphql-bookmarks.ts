@@ -550,7 +550,14 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHeader?: string, pageSize?: number, abortSignal?: AbortSignal): Promise<PageResult> {
+export async function fetchPageWithRetry(
+  csrfToken: string,
+  cursor?: string,
+  cookieHeader?: string,
+  pageSize?: number,
+  abortSignal?: AbortSignal,
+  sleepFn: typeof sleep = sleep,
+): Promise<PageResult> {
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -573,7 +580,7 @@ async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHead
         : err instanceof Error
           ? err
           : new Error(String(err));
-      await sleep(5000 * (attempt + 1), abortSignal);
+      if (attempt < 3) await sleepFn(5000 * (attempt + 1), abortSignal);
       continue;
     } finally {
       clearTimeout(timeout);
@@ -583,13 +590,13 @@ async function fetchPageWithRetry(csrfToken: string, cursor?: string, cookieHead
     if (response.status === 429) {
       const waitSec = Math.min(15 * Math.pow(2, attempt), 120);
       lastError = new Error(`Rate limited (429) on attempt ${attempt + 1}`);
-      await sleep(waitSec * 1000, abortSignal);
+      if (attempt < 3) await sleepFn(waitSec * 1000, abortSignal);
       continue;
     }
 
     if (response.status >= 500) {
       lastError = new Error(`Server error (${response.status}) on attempt ${attempt + 1}`);
-      await sleep(5000 * (attempt + 1), abortSignal);
+      if (attempt < 3) await sleepFn(5000 * (attempt + 1), abortSignal);
       continue;
     }
 
@@ -631,9 +638,39 @@ export function scoreRecord(record: BookmarkRecord): number {
 
 export function mergeBookmarkRecord(existing: BookmarkRecord | undefined, incoming: BookmarkRecord): BookmarkRecord {
   if (!existing) return incoming;
-  return scoreRecord(incoming) >= scoreRecord(existing)
-    ? { ...existing, ...incoming }
-    : { ...incoming, ...existing };
+  const incomingPreferred = scoreRecord(incoming) >= scoreRecord(existing);
+  const preferred = incomingPreferred ? incoming : existing;
+  const fallback = incomingPreferred ? existing : incoming;
+  const merged = { ...fallback, ...preferred } as BookmarkRecord;
+  const hasValue = (value: unknown) => value != null &&
+    (typeof value !== 'string' || value.trim().length > 0) &&
+    (!Array.isArray(value) || value.length > 0);
+
+  for (const [key, value] of Object.entries(preferred)) {
+    const fallbackValue = (fallback as unknown as Record<string, unknown>)[key];
+    if (!hasValue(value) && hasValue(fallbackValue)) {
+      (merged as unknown as Record<string, unknown>)[key] = fallbackValue;
+    }
+  }
+
+  const mergeObjects = <T extends object>(older: T | undefined, newer: T | undefined): T | undefined => {
+    if (!older) return newer;
+    if (!newer) return older;
+    const result = { ...older, ...newer } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(newer)) {
+      if (!hasValue(value) && hasValue((older as Record<string, unknown>)[key])) {
+        result[key] = (older as Record<string, unknown>)[key];
+      }
+    }
+    return result as T;
+  };
+
+  merged.author = mergeObjects(fallback.author, preferred.author);
+  merged.engagement = mergeObjects(fallback.engagement, preferred.engagement);
+  merged.quotedTweet = mergeObjects(fallback.quotedTweet, preferred.quotedTweet);
+  merged.tags = existing.tags?.length ? existing.tags : incoming.tags;
+  merged.syncedAt = existing.syncedAt || incoming.syncedAt;
+  return merged;
 }
 
 export function mergeRecords(

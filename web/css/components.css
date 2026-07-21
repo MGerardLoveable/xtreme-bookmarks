@@ -241,14 +241,14 @@
   width: 14px;
   height: 14px;
   border: 2px solid var(--border);
-  border-top-color: currentColor;
+  border-top-color: currentcolor;
   border-radius: 50%;
   animation: spin 800ms linear infinite;
 }
 .library-grab-status[data-state="done"] .library-grab-spinner,
 .library-grab-status[data-state="error"] .library-grab-spinner {
   animation: none;
-  border-color: currentColor;
+  border-color: currentcolor;
 }
 
 /* Command palette */

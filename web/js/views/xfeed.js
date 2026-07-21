@@ -494,6 +494,7 @@ export function XFeedView(root) {
       await fn();
       if (options.refresh !== false) await refresh();
     } catch (err) {
+      if (err?.name === 'AbortError') return;
       actionError = err.payload?.userMessage || err.message || 'Radar action failed';
       if (typeof options.onError === 'function') options.onError(err);
       renderStatus();

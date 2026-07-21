@@ -11,6 +11,7 @@ import {
   mergeBookmarkRecord,
   mergeRecords,
   formatSyncResult,
+  fetchPageWithRetry,
   syncBookmarksGraphQL,
 } from '../src/graphql-bookmarks.js';
 import type { BookmarkRecord } from '../src/types.js';
@@ -516,6 +517,45 @@ test('mergeBookmarkRecord: sparser incoming does not clobber richer existing', (
   const result = mergeBookmarkRecord(existing, incoming);
   assert.equal(result.text, 'Rich');
   assert.ok(result.author);
+});
+
+test('mergeBookmarkRecord preserves field-level metadata, local tags, and first capture time', () => {
+  const existing = makeRecord({
+    syncedAt: '2026-01-10T00:00:00.000Z',
+    author: { handle: 'user', description: 'Detailed bio' } as any,
+    engagement: { likeCount: 12, viewCount: 500 },
+    tags: ['reviewed'],
+  });
+  const incoming = makeRecord({
+    syncedAt: '2026-02-10T00:00:00.000Z',
+    author: { handle: 'user' } as any,
+    engagement: { likeCount: 0 },
+    tags: [],
+  });
+
+  const result = mergeBookmarkRecord(existing, incoming);
+
+  assert.equal(result.author?.description, 'Detailed bio');
+  assert.equal(result.engagement?.likeCount, 0);
+  assert.equal(result.engagement?.viewCount, 500);
+  assert.deepEqual(result.tags, ['reviewed']);
+  assert.equal(result.syncedAt, '2026-01-10T00:00:00.000Z');
+});
+
+test('fetchPageWithRetry does not back off after the final retryable failure', async () => {
+  const previousFetch = globalThis.fetch;
+  const delays: number[] = [];
+  globalThis.fetch = async () => new Response('temporary failure', { status: 500 });
+
+  try {
+    await assert.rejects(
+      fetchPageWithRetry('csrf', undefined, 'auth_token=test', 20, undefined, async (ms) => { delays.push(ms); }),
+      /Server error \(500\) on attempt 4/,
+    );
+    assert.deepEqual(delays, [5000, 10000, 15000]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test('mergeBookmarkRecord: equal scores prefer incoming (>=)', () => {

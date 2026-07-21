@@ -29,6 +29,28 @@ test('openDb shares one live database across leases', async () => {
   }
 });
 
+test('openDb serializes concurrent first opens for the same path', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xb-db-concurrent-'));
+  const dbPath = path.join(dir, 'bookmarks.db');
+  const [first, second] = await Promise.all([openDb(dbPath), openDb(dbPath)]);
+  try {
+    first.run('CREATE TABLE concurrent_values (value TEXT)');
+    first.run("INSERT INTO concurrent_values VALUES ('shared')");
+    assert.deepEqual(second.exec('SELECT value FROM concurrent_values')[0]?.values, [['shared']]);
+
+    first.close();
+    const third = await openDb(dbPath);
+    try {
+      assert.deepEqual(third.exec('SELECT value FROM concurrent_values')[0]?.values, [['shared']]);
+    } finally {
+      third.close();
+    }
+  } finally {
+    second.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('saveDb creates restorable private backups', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xb-db-backup-'));
   const dbPath = path.join(dir, 'bookmarks.db');

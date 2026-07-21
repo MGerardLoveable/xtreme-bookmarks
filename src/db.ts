@@ -23,6 +23,7 @@ export interface DatabaseBackup {
 }
 
 const sharedDatabases = new Map<string, SharedDatabaseEntry>();
+const pendingDatabaseOpens = new Map<string, Promise<SharedDatabaseEntry>>();
 const databaseLeases = new WeakMap<object, SharedDatabaseEntry>();
 const BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_BACKUP_LIMIT = 12;
@@ -70,6 +71,24 @@ export async function openDb(filePath: string): Promise<Database> {
   const existing = sharedDatabases.get(resolvedPath);
   if (existing) return createDatabaseLease(existing);
 
+  let pending = pendingDatabaseOpens.get(resolvedPath);
+  if (!pending) {
+    pending = createSharedDatabase(resolvedPath);
+    pendingDatabaseOpens.set(resolvedPath, pending);
+  }
+
+  let entry: SharedDatabaseEntry;
+  try {
+    entry = await pending;
+  } finally {
+    if (pendingDatabaseOpens.get(resolvedPath) === pending) {
+      pendingDatabaseOpens.delete(resolvedPath);
+    }
+  }
+  return createDatabaseLease(entry);
+}
+
+async function createSharedDatabase(resolvedPath: string): Promise<SharedDatabaseEntry> {
   const SQL = await getSql();
   const database = fs.existsSync(resolvedPath)
     ? new SQL.Database(fs.readFileSync(resolvedPath))
@@ -81,7 +100,7 @@ export async function openDb(filePath: string): Promise<Database> {
     mtimeMs: fileMtimeMs(resolvedPath),
   };
   sharedDatabases.set(resolvedPath, entry);
-  return createDatabaseLease(entry);
+  return entry;
 }
 
 export async function createDb(): Promise<Database> {

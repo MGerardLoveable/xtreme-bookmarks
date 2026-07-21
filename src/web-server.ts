@@ -193,16 +193,25 @@ async function buildWebGrabSyncOptions(
   mode: 'quick' | 'backfill' = 'quick',
 ): Promise<SyncOptions> {
   const backfillState = await loadWebBackfillState();
+  return resolveWebGrabSyncOptions(backfillState, browser, onProgress, mode);
+}
+
+export function resolveWebGrabSyncOptions(
+  backfillState: WebBackfillState | undefined,
+  browser: string | undefined,
+  onProgress?: (status: SyncProgress) => void,
+  mode: 'quick' | 'backfill' = 'quick',
+): SyncOptions {
   const resumeCursor =
     backfillState?.lastCursor && RESUMABLE_WEB_GRAB_REASONS.has(backfillState?.stopReason ?? 'unknown')
       ? backfillState.lastCursor
       : undefined;
-  const shouldContinueBackfill = mode === 'backfill' && Boolean(resumeCursor);
+  const isBackfill = mode === 'backfill';
 
   return {
-    incremental: !shouldContinueBackfill,
-    resumeCursor,
-    stalePageLimit: shouldContinueBackfill ? Infinity : undefined,
+    incremental: !isBackfill,
+    resumeCursor: isBackfill ? resumeCursor : undefined,
+    stalePageLimit: isBackfill ? Infinity : undefined,
     maxPages: WEB_GRAB_MAX_PAGES,
     pageSize: WEB_GRAB_PAGE_SIZE,
     checkpointEvery: WEB_GRAB_CHECKPOINT_EVERY,
@@ -549,6 +558,7 @@ interface Filters {
   domain?: string;
   collection?: string;
   after?: string;
+  capturedAfter?: string;
   before?: string;
   sort?: string;
   limit?: number;
@@ -602,7 +612,7 @@ function requestWebAuth(res: http.ServerResponse): void {
   res.end(JSON.stringify({ error: 'Authentication required' }));
 }
 
-function buildWhere(filters: Filters): { where: string; params: (string | number)[] } {
+export function buildWhere(filters: Filters): { where: string; params: (string | number)[] } {
   const conds: string[] = [];
   const params: (string | number)[] = [];
 
@@ -629,6 +639,10 @@ function buildWhere(filters: Filters): { where: string; params: (string | number
   if (filters.after) {
     conds.push(`COALESCE(b.posted_at, b.bookmarked_at) >= ?`);
     params.push(filters.after);
+  }
+  if (filters.capturedAfter) {
+    conds.push(`b.synced_at >= ?`);
+    params.push(filters.capturedAfter);
   }
   if (filters.before) {
     conds.push(`COALESCE(b.posted_at, b.bookmarked_at) <= ?`);
@@ -678,6 +692,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     domain: params.get('domain') || undefined,
     collection: params.get('collection') || undefined,
     after: params.get('after') || undefined,
+    capturedAfter: params.get('capturedAfter') || undefined,
     before: params.get('before') || undefined,
     sort: params.get('sort') || 'desc',
     limit: Math.min(Number(params.get('limit')) || 30, 100),

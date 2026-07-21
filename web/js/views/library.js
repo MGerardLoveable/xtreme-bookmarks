@@ -396,7 +396,7 @@ export function LibraryView(root) {
         domain: state.filters.domain || undefined,
         collection: state.filters.collection || undefined,
         readStatus: state.filters.readStatus || undefined,
-        after: state.inbox ? inboxSince : undefined,
+        capturedAfter: state.inbox ? inboxSince : undefined,
         sort: state.sort,
         limit: PAGE_SIZE,
         offset: state.offset,

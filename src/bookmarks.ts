@@ -105,20 +105,52 @@ function compareChronology(a: BookmarkRecord, b: BookmarkRecord): number {
   return bTimestamp.localeCompare(aTimestamp);
 }
 
-function mergeApiRecord(existing: BookmarkRecord | undefined, incoming: BookmarkRecord): BookmarkRecord {
+function hasValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+function mergeDefinedObject<T extends object>(existing: T | undefined, incoming: T | undefined): T | undefined {
   if (!existing) return incoming;
-  return {
+  if (!incoming) return existing;
+  const merged = { ...existing, ...incoming } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!hasValue(value) && hasValue((existing as Record<string, unknown>)[key])) {
+      merged[key] = (existing as Record<string, unknown>)[key];
+    }
+  }
+  return merged as T;
+}
+
+export function mergeApiRecord(existing: BookmarkRecord | undefined, incoming: BookmarkRecord): BookmarkRecord {
+  if (!existing) return incoming;
+  const merged = {
     ...existing,
     ...incoming,
-    author: incoming.author ?? existing.author,
-    authorProfileImageUrl: incoming.authorProfileImageUrl ?? existing.authorProfileImageUrl,
-    engagement: incoming.engagement ?? existing.engagement,
+  };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!hasValue(value) && hasValue((existing as unknown as Record<string, unknown>)[key])) {
+      (merged as unknown as Record<string, unknown>)[key] = (existing as unknown as Record<string, unknown>)[key];
+    }
+  }
+  return {
+    ...merged,
+    url: incoming.url.includes('/i/status/') && !existing.url.includes('/i/status/')
+      ? existing.url
+      : merged.url,
+    author: mergeDefinedObject(existing.author, incoming.author),
+    engagement: mergeDefinedObject(existing.engagement, incoming.engagement),
     media: incoming.media?.length ? incoming.media : existing.media,
     mediaObjects: incoming.mediaObjects?.length ? incoming.mediaObjects : existing.mediaObjects,
     links: incoming.links?.length ? incoming.links : existing.links,
-    tags: existing.tags ?? incoming.tags,
-    quotedTweet: incoming.quotedTweet ?? existing.quotedTweet,
+    tags: existing.tags?.length ? existing.tags : incoming.tags,
+    quotedTweet: mergeDefinedObject(existing.quotedTweet, incoming.quotedTweet),
     sortIndex: incoming.sortIndex ?? existing.sortIndex,
+    // syncedAt is the local capture time used by Inbox, not a refresh timestamp.
+    syncedAt: existing.syncedAt || incoming.syncedAt,
+    ingestedVia: existing.ingestedVia ?? incoming.ingestedVia,
   };
 }
 
@@ -219,6 +251,7 @@ async function fetchBookmarksPage(accessToken: string, userId: string, nextToken
     }
 
     if (result.status === 429 || result.status >= 500) {
+      if (attempt === API_FETCH_ATTEMPTS - 1) break;
       const waitSec = Math.min(15 * Math.pow(2, attempt), 120);
       await new Promise((r) => setTimeout(r, waitSec * 1000));
       continue;
