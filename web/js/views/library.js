@@ -13,6 +13,34 @@ const CATEGORY_OPTIONS = ['unclassified', 'tool', 'security', 'technique', 'laun
 const LS_LIBRARY_PRESENTATION = 'xb.library.presentation';
 const LS_LIBRARY_MODE = 'xb.library.mode';
 
+function highlightSearchText(value, tokens) {
+  const text = String(value || '');
+  const searchTokens = (tokens || []).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!searchTokens.length) return escape(text);
+  const lower = text.toLowerCase();
+  let cursor = 0;
+  let html = '';
+  while (cursor < text.length) {
+    let nextIndex = -1;
+    let nextToken = '';
+    for (const token of searchTokens) {
+      const index = lower.indexOf(token.toLowerCase(), cursor);
+      if (index >= 0 && (nextIndex < 0 || index < nextIndex)) {
+        nextIndex = index;
+        nextToken = token;
+      }
+    }
+    if (nextIndex < 0) {
+      html += escape(text.slice(cursor));
+      break;
+    }
+    html += escape(text.slice(cursor, nextIndex));
+    html += `<mark class="search-hit">${escape(text.slice(nextIndex, nextIndex + nextToken.length))}</mark>`;
+    cursor = nextIndex + nextToken.length;
+  }
+  return html;
+}
+
 function mediaItemsFor(b) {
   const seen = new Set();
   const items = [];
@@ -68,6 +96,7 @@ export function LibraryView(root) {
     hasMore: false,
     facets: { categories: [], domains: [], collections: [], authors: [] },
     inbox: false,
+    search: null,
   };
   let listController = null;
   let detailController = null;
@@ -417,8 +446,9 @@ export function LibraryView(root) {
         limit: PAGE_SIZE,
         offset: state.offset,
       };
-      const { bookmarks, total } = await api.listBookmarks(params, { signal: listController.signal });
+      const { bookmarks, total, search } = await api.listBookmarks(params, { signal: listController.signal });
       state.total = total;
+      state.search = search || null;
       state.hasMore = state.offset + bookmarks.length < total;
       state.bookmarks = append ? [...state.bookmarks, ...bookmarks] : bookmarks;
       renderList();
@@ -439,6 +469,7 @@ export function LibraryView(root) {
     els.summary.innerHTML = `
       <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> of ${fmtNumber(total)} results</span>
       ${activeFilter ? `<span class="summary-context">${escape(String(activeFilter))}</span>` : ''}
+      ${state.search?.correction ? `<button class="search-correction" id="lib-search-correction">Showing results for <strong>${escape(state.search.correction)}</strong><span>Clear</span></button>` : ''}
       ${state.inbox ? `<span class="summary-context"><span data-icon="inbox"></span>Since ${escape(new Date(inboxSince).toLocaleDateString())}</span><button class="btn btn-sm btn-ghost" id="lib-inbox-done">Mark inbox reviewed</button>` : ''}
     `;
     renderIcons(els.summary);
@@ -450,6 +481,13 @@ export function LibraryView(root) {
       state.offset = 0;
       load();
       toast('Inbox reviewed');
+    });
+    $('#lib-search-correction', els.summary)?.addEventListener('click', () => {
+      state.search = null;
+      state.filters.q = '';
+      els.search.value = '';
+      state.offset = 0;
+      load();
     });
   }
 
@@ -473,7 +511,7 @@ export function LibraryView(root) {
         <div class="empty-state">
           <span class="empty-icon" data-icon="inbox"></span>
           <h3>No bookmarks found</h3>
-          <p>Try removing a filter, broadening your search, or running <kbd>Grab</kbd>.</p>
+          <p>${state.filters.q ? `No tweet text, quoted post, note, highlight, author, link, or domain matched “${escape(state.filters.q)}”.` : 'Try removing a filter or running Grab.'}</p>
         </div>`;
       renderIcons(els.list);
       return;
@@ -511,6 +549,14 @@ export function LibraryView(root) {
       ...(b.categories || []).slice(0, 3).map((c) => `<span class="chip chip-cat chip-cat-${escape(String(c).toLowerCase())}">${escape(c)}</span>`),
     ].filter(Boolean).join('');
     const postedOrBookmarked = b.bookmarkedAt || b.postedAt;
+    const searchTokens = state.search?.tokens || [];
+    const matchedFields = Array.isArray(b.searchMatch) ? b.searchMatch : [];
+    const matchLabel = matchedFields.length
+      ? `<span class="search-match-label">Matched ${escape(matchedFields.join(', '))}</span>`
+      : '';
+    const quotedContext = matchedFields.includes('quoted post') && b.quotedText
+      ? `<div class="search-match-context"><span>Quoted</span>${highlightSearchText(b.quotedText, searchTokens)}</div>`
+      : '';
     const row = el('article', {
       class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}`,
       dataset: { id: b.id, idx: String(idx) },
@@ -528,7 +574,9 @@ export function LibraryView(root) {
           <span title="${escape(postedOrBookmarked || '')}">${fmtRelativeTime(postedOrBookmarked)}</span>
           ${b.mediaCount ? `<span>·</span><span>${b.mediaCount} media</span>` : ''}
         </div>
-        <div class="bookmark-text">${escape(b.text || '')}</div>
+        <div class="bookmark-text">${highlightSearchText(b.text || '', searchTokens)}</div>
+        ${quotedContext}
+        ${matchLabel}
         ${tags ? `<div class="bookmark-tags">${tags}</div>` : ''}
       </div>
       ${mediaThumb(mediaItems)}
