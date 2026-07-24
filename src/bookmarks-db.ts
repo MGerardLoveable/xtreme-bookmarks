@@ -7,8 +7,9 @@ import type { BookmarkRecord, QuotedTweetSnapshot } from './types.js';
 import { classifyCorpus, formatClassificationSummary } from './bookmark-classify.js';
 import type { ClassificationSummary } from './bookmark-classify.js';
 import { createHash } from 'node:crypto';
+import { buildSearchPlan, levenshteinDistance, type SearchPlan } from './search.js';
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 export interface SearchResult {
   id: string;
@@ -153,8 +154,9 @@ function buildBookmarkWhereClause(filters: BookmarkTimelineFilters): {
   const params: Array<string | number> = [];
 
   if (filters.query) {
+    const plan = buildSearchPlan(filters.query);
     conditions.push(`b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?)`);
-    params.push(filters.query);
+    params.push(plan.broadQuery);
   }
   if (filters.author) {
     conditions.push(`b.author_handle = ? COLLATE NOCASE`);
@@ -254,14 +256,8 @@ function initSchema(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_memory_tier ON bookmarks(memory_tier)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_in_wiki ON bookmarks(in_wiki)`);
 
-  db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
-    text,
-    author_handle,
-    author_name,
-    content=bookmarks,
-    content_rowid=rowid,
-    tokenize='porter unicode61'
-  )`);
+  createSearchAuxiliaryTables(db);
+  createSearchTable(db);
 
   db.run(`REPLACE INTO meta VALUES ('schema_version', '${SCHEMA_VERSION}')`);
 }
@@ -316,8 +312,147 @@ export function ensureMigrations(db: Database): void {
       try { db.run('ALTER TABLE bookmarks ADD COLUMN source_hash TEXT'); } catch { /* already exists */ }
     }
   }
+  if (version < 9) {
+    createSearchAuxiliaryTables(db);
+    db.run('DROP TABLE IF EXISTS bookmarks_fts_vocab');
+    db.run('DROP TABLE IF EXISTS bookmarks_fts');
+    createSearchTable(db);
+    if (tableExists(db, 'bookmarks')) rebuildBookmarkSearchIndex(db);
+  }
   if (version < SCHEMA_VERSION) {
     db.run(`REPLACE INTO meta VALUES ('schema_version', '${SCHEMA_VERSION}')`);
+  }
+}
+
+function tableExists(db: Database, name: string): boolean {
+  const rows = db.exec("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ? LIMIT 1", [name]);
+  return Boolean(rows[0]?.values.length);
+}
+
+function createSearchAuxiliaryTables(db: Database): void {
+  db.run(`CREATE TABLE IF NOT EXISTS bookmark_notes (
+    bookmark_id TEXT PRIMARY KEY,
+    note TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS bookmark_highlights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bookmark_id TEXT NOT NULL,
+    text_fragment TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT 'yellow',
+    created_at TEXT NOT NULL
+  )`);
+}
+
+function createSearchTable(db: Database): void {
+  db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
+    text,
+    quoted_text,
+    author_handle,
+    author_name,
+    notes,
+    highlights,
+    links,
+    domains,
+    tokenize='porter unicode61 remove_diacritics 2'
+  )`);
+}
+
+export function refreshBookmarkSearchRow(db: Database, bookmarkId: string): void {
+  const row = db.exec('SELECT rowid FROM bookmarks WHERE id = ? LIMIT 1', [bookmarkId])[0]?.values?.[0];
+  if (!row) return;
+  const rowid = Number(row[0]);
+  db.run('DELETE FROM bookmarks_fts WHERE rowid = ?', [rowid]);
+  db.run(
+    `INSERT INTO bookmarks_fts(
+      rowid, text, quoted_text, author_handle, author_name, notes, highlights, links, domains
+    )
+    SELECT
+      b.rowid,
+      COALESCE(b.text, ''),
+      COALESCE(b.quoted_text, ''),
+      COALESCE(b.author_handle, ''),
+      COALESCE(b.author_name, ''),
+      COALESCE((SELECT group_concat(n.note, ' ') FROM bookmark_notes n WHERE n.bookmark_id = b.id), ''),
+      COALESCE((SELECT group_concat(h.text_fragment, ' ') FROM bookmark_highlights h WHERE h.bookmark_id = b.id), ''),
+      COALESCE(b.links_json, ''),
+      COALESCE(b.domains, '')
+    FROM bookmarks b
+    WHERE b.id = ?`,
+    [bookmarkId],
+  );
+}
+
+export function rebuildBookmarkSearchIndex(db: Database): void {
+  createSearchAuxiliaryTables(db);
+  createSearchTable(db);
+  db.run('DELETE FROM bookmarks_fts');
+  db.run(
+    `INSERT INTO bookmarks_fts(
+      rowid, text, quoted_text, author_handle, author_name, notes, highlights, links, domains
+    )
+    SELECT
+      b.rowid,
+      COALESCE(b.text, ''),
+      COALESCE(b.quoted_text, ''),
+      COALESCE(b.author_handle, ''),
+      COALESCE(b.author_name, ''),
+      COALESCE((SELECT group_concat(n.note, ' ') FROM bookmark_notes n WHERE n.bookmark_id = b.id), ''),
+      COALESCE((SELECT group_concat(h.text_fragment, ' ') FROM bookmark_highlights h WHERE h.bookmark_id = b.id), ''),
+      COALESCE(b.links_json, ''),
+      COALESCE(b.domains, '')
+    FROM bookmarks b`,
+  );
+}
+
+export function suggestSearchCorrection(db: Database, plan: SearchPlan): string | null {
+  if (!plan.tokens.length || plan.tokens.some((token) => token.length < 4)) return null;
+  try {
+    db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts_vocab USING fts5vocab(bookmarks_fts, 'row')`);
+    const corrected = plan.tokens.map((token) => {
+      const hasMatches = (value: string) => {
+        const query = buildSearchPlan(value).strictQuery;
+        if (!query) return false;
+        return Number(db.exec(
+          'SELECT COUNT(*) FROM bookmarks_fts WHERE bookmarks_fts MATCH ?',
+          [query],
+        )[0]?.values?.[0]?.[0] ?? 0) > 0;
+      };
+      if (hasMatches(token)) return token;
+      const first = token[0];
+      const variants: string[] = [];
+      for (let index = 0; index < token.length - 1; index += 1) {
+        variants.push(`${token.slice(0, index)}${token[index + 1]}${token[index]}${token.slice(index + 2)}`);
+      }
+      if (token.endsWith('tres')) variants.push(`${token.slice(0, -4)}ters`);
+      const matchingVariant = variants.find(hasMatches);
+      if (matchingVariant) return matchingVariant;
+      variants.unshift(token);
+      const rows = db.exec(
+        `SELECT term, doc FROM bookmarks_fts_vocab
+         WHERE term GLOB ? AND length(term) BETWEEN ? AND ?
+         ORDER BY doc DESC LIMIT 250`,
+        [`${first}*`, Math.max(2, token.length - 2), token.length + 2],
+      )[0]?.values ?? [];
+      const maxDistance = token.length >= 6 ? 3 : 1;
+      const candidates = rows
+        .map((row) => ({
+          term: String(row[0]),
+          doc: Number(row[1] ?? 0),
+          variant: variants
+            .map((variant) => ({ variant, distance: levenshteinDistance(variant, String(row[0])) }))
+            .sort((a, b) => a.distance - b.distance || Number(a.variant === token) - Number(b.variant === token))[0],
+        }))
+        .filter((candidate) => candidate.variant.distance <= maxDistance)
+        .sort((a, b) => a.variant.distance - b.variant.distance || b.doc - a.doc);
+      const best = candidates[0];
+      if (!best) return token;
+      return best.variant.variant.startsWith(best.term) ? best.variant.variant : best.term;
+    });
+    if (corrected.every((token, index) => token === plan.tokens[index])) return null;
+    return corrected.join(' ');
+  } catch {
+    return null;
   }
 }
 
@@ -469,6 +604,7 @@ export async function buildIndex(options?: { force?: boolean }): Promise<{ dbPat
   const db = await openDb(dbPath);
   try {
     if (options?.force) {
+      db.run('DROP TABLE IF EXISTS bookmarks_fts_vocab');
       db.run('DROP TABLE IF EXISTS bookmarks_fts');
       db.run('DROP TABLE IF EXISTS bookmarks');
       db.run('DROP TABLE IF EXISTS meta');
@@ -514,8 +650,7 @@ export async function buildIndex(options?: { force?: boolean }): Promise<{ dbPat
       }
     }
 
-    // Rebuild FTS index from content table
-    db.run(`INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('rebuild')`);
+    rebuildBookmarkSearchIndex(db);
 
     saveDb(db, dbPath);
     const totalRows = db.exec('SELECT COUNT(*) FROM bookmarks')[0]?.values[0]?.[0] as number;
@@ -571,16 +706,7 @@ export async function updateIndexIncrementally(): Promise<{ dbPath: string; reco
           newRecords += 1;
         }
         insertRecord(db, record, existing?.preserved);
-        const row = db.exec(
-          'SELECT rowid, text, author_handle, author_name FROM bookmarks WHERE id = ?',
-          [record.id],
-        )[0]?.values?.[0];
-        if (row) {
-          db.run(
-            'INSERT INTO bookmarks_fts(rowid, text, author_handle, author_name) VALUES (?, ?, ?, ?)',
-            [row[0], row[1], row[2], row[3]],
-          );
-        }
+        refreshBookmarkSearchRow(db, record.id);
       }
       db.run('COMMIT');
     } catch (err) {
@@ -606,13 +732,15 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
     const conditions: string[] = [];
     const params: any[] = [];
 
-    if (options.query) {
-      conditions.push(`b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?)`);
-      params.push(options.query);
+    const plan = buildSearchPlan(options.query);
+    const author = options.author ?? plan.author;
+    if (plan.broadQuery) {
+      conditions.push(`bookmarks_fts MATCH ?`);
+      params.push(plan.broadQuery);
     }
-    if (options.author) {
+    if (author) {
       conditions.push(`b.author_handle = ? COLLATE NOCASE`);
-      params.push(options.author);
+      params.push(author);
     }
     if (options.after) {
       conditions.push(`b.posted_at >= ?`);
@@ -626,16 +754,20 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // If we have an FTS query, use bm25 for ranking; otherwise sort by posted_at
-    const orderBy = options.query
-      ? `ORDER BY bm25(bookmarks_fts, 5.0, 1.0, 1.0) ASC`
+    const orderBy = plan.broadQuery
+      ? `ORDER BY
+           CASE WHEN b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?) THEN 0 ELSE 1 END,
+           CASE WHEN instr(lower(b.text), ?) > 0 THEN 0 ELSE 1 END,
+           bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) ASC`
       : `ORDER BY b.posted_at DESC`;
 
     // For FTS ranking we need to join with the FTS table for bm25
     let sql: string;
-    if (options.query) {
+    if (plan.broadQuery) {
+      params.push(plan.strictQuery, plan.phrase);
       sql = `
         SELECT b.id, b.url, b.text, b.author_handle, b.author_name, b.posted_at,
-               bm25(bookmarks_fts, 5.0, 1.0, 1.0) as score
+               bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) as score
         FROM bookmarks b
         JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid
         ${where}
@@ -659,9 +791,7 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
       rows = db.exec(sql, params);
     } catch (err) {
       const msg = (err as Error).message ?? '';
-      if (msg.includes('fts5') || msg.includes('MATCH') || msg.includes('syntax')) {
-        throw new Error(`Invalid search query: "${options.query}". Try simpler terms or wrap phrases in double quotes.`);
-      }
+      if (msg.includes('fts5') || msg.includes('MATCH') || msg.includes('syntax')) throw new Error('Search index unavailable.');
       throw err;
     }
     if (!rows.length) return [];
@@ -1155,9 +1285,10 @@ export async function updateQuotedTweets(
   ensureMigrations(db);
 
   try {
-    const stmt = db.prepare('UPDATE bookmarks SET quoted_tweet_json = ? WHERE id = ?');
+    const stmt = db.prepare('UPDATE bookmarks SET quoted_tweet_json = ?, quoted_text = ? WHERE id = ?');
     for (const record of records) {
-      stmt.run([JSON.stringify(record.quotedTweet), record.id]);
+      stmt.run([JSON.stringify(record.quotedTweet), record.quotedTweet.text ?? '', record.id]);
+      refreshBookmarkSearchRow(db, record.id);
     }
     stmt.free();
     saveDb(db, dbPath);
@@ -1177,10 +1308,9 @@ export async function updateBookmarkText(
     const stmt = db.prepare('UPDATE bookmarks SET text = ? WHERE id = ?');
     for (const record of records) {
       stmt.run([record.text, record.id]);
+      refreshBookmarkSearchRow(db, record.id);
     }
     stmt.free();
-    // Rebuild FTS to reflect updated text
-    db.run("INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('rebuild')");
     saveDb(db, dbPath);
   } finally {
     db.close();

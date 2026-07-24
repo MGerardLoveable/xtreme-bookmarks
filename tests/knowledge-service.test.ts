@@ -67,8 +67,8 @@ test('knowledge retrieval includes bookmark notes, highlights, and Brain artifac
     const db = await openDb(dbPath);
     try {
       initBrainSchema(db);
-      db.run('CREATE TABLE bookmark_notes (bookmark_id TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT NOT NULL)');
-      db.run('CREATE TABLE bookmark_highlights (id INTEGER PRIMARY KEY AUTOINCREMENT, bookmark_id TEXT NOT NULL, text_fragment TEXT NOT NULL, color TEXT NOT NULL, created_at TEXT NOT NULL)');
+      db.run('CREATE TABLE IF NOT EXISTS bookmark_notes (bookmark_id TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT NOT NULL)');
+      db.run('CREATE TABLE IF NOT EXISTS bookmark_highlights (id INTEGER PRIMARY KEY AUTOINCREMENT, bookmark_id TEXT NOT NULL, text_fragment TEXT NOT NULL, color TEXT NOT NULL, created_at TEXT NOT NULL)');
       db.run('INSERT INTO bookmark_notes VALUES (?, ?, ?)', ['bookmark-1', 'Provenance makes agent memory trustworthy.', '2026-07-02T00:00:00Z']);
       db.run('INSERT INTO bookmark_highlights (bookmark_id, text_fragment, color, created_at) VALUES (?, ?, ?, ?)', ['bookmark-1', 'evidence and provenance', 'green', '2026-07-02T00:00:00Z']);
       upsertBrainArtifactFromDb(db, {

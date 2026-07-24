@@ -3,7 +3,17 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildIndex, updateIndexIncrementally, searchBookmarks, getStats, formatSearchResults, getBookmarkById } from '../src/bookmarks-db.js';
+import {
+  buildIndex,
+  updateIndexIncrementally,
+  searchBookmarks,
+  getStats,
+  formatSearchResults,
+  getBookmarkById,
+  refreshBookmarkSearchRow,
+  suggestSearchCorrection,
+} from '../src/bookmarks-db.js';
+import { buildSearchPlan } from '../src/search.js';
 import { openDb, saveDb } from '../src/db.js';
 import { twitterBookmarksIndexPath } from '../src/paths.js';
 
@@ -191,6 +201,58 @@ test('searchBookmarks: no results for unmatched query', async () => {
     const results = await searchBookmarks({ query: 'cryptocurrency', limit: 10 });
     assert.equal(results.length, 0);
   });
+});
+
+test('searchBookmarks treats punctuation and apostrophes as natural text', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    assert.equal((await searchBookmarks({ query: "Machine's learning?" }))[0]?.id, '1');
+  });
+});
+
+test('searchBookmarks supports partial words', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    assert.equal((await searchBookmarks({ query: 'transfor healthc' }))[0]?.id, '1');
+  });
+});
+
+test('search correction repairs adjacent-letter typos', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    const db = await openDb(twitterBookmarksIndexPath());
+    try {
+      assert.equal(suggestSearchCorrection(db, buildSearchPlan('transfroming')), 'transforming');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test('search index includes quoted posts, notes, and highlights', async () => {
+  const fixtures = [{
+    ...FIXTURES[0],
+    quotedTweet: { id: 'quoted-1', text: 'Orbital datacenters have a physics problem' },
+  }];
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    const dbPath = twitterBookmarksIndexPath();
+    const db = await openDb(dbPath);
+    try {
+      db.run('INSERT INTO bookmark_notes VALUES (?, ?, ?)', ['1', 'Permanent memory across sessions', '2026-01-02T00:00:00Z']);
+      db.run(
+        'INSERT INTO bookmark_highlights (bookmark_id, text_fragment, color, created_at) VALUES (?, ?, ?, ?)',
+        ['1', 'evidence-backed research', 'yellow', '2026-01-02T00:00:00Z'],
+      );
+      refreshBookmarkSearchRow(db, '1');
+      saveDb(db, dbPath);
+    } finally {
+      db.close();
+    }
+    assert.equal((await searchBookmarks({ query: 'orbital physics' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'permanent sessions' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'evidence research' }))[0]?.id, '1');
+  }, fixtures);
 });
 
 test('getStats returns correct aggregate data', async () => {

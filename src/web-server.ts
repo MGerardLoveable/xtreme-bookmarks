@@ -10,7 +10,15 @@ import { backupDb, databaseIntegrity, listDbBackups, openDb, saveDb } from './db
 import { twitterBookmarksIndexPath, mdDir, twitterBookmarksCachePath, twitterBackfillStatePath } from './paths.js';
 import { deleteTwitterBookmark, syncTwitterBookmarks } from './bookmarks.js';
 import { syncBookmarksGraphQL, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
-import { buildIndex, updateIndexIncrementally, updateBookmarkWikiStatus, ensureMigrations } from './bookmarks-db.js';
+import {
+  buildIndex,
+  updateIndexIncrementally,
+  updateBookmarkWikiStatus,
+  ensureMigrations,
+  refreshBookmarkSearchRow,
+  suggestSearchCorrection,
+} from './bookmarks-db.js';
+import { buildSearchPlan, type SearchPlan } from './search.js';
 import { readJson, readJsonLines, writeJsonLines } from './fs.js';
 import { browserUserDataDir, getBrowser, listBrowserIds } from './browsers.js';
 import { addBookmarkToWiki, compileMd } from './md.js';
@@ -400,6 +408,7 @@ function mapRow(row: unknown[]): Record<string, unknown> {
     bookmarkCount: row[21] ?? null,
     viewCount: row[22] ?? null,
     inWiki: Boolean(row[23] ?? 0),
+    quotedText: row[25] ?? null,
   };
 }
 
@@ -617,8 +626,9 @@ export function buildWhere(filters: Filters): { where: string; params: (string |
   const params: (string | number)[] = [];
 
   if (filters.q) {
+    const plan = buildSearchPlan(filters.q);
     conds.push(`b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?)`);
-    params.push(filters.q);
+    params.push(plan.broadQuery);
   }
   if (filters.author) {
     conds.push(`b.author_handle = ? COLLATE NOCASE`);
@@ -670,7 +680,7 @@ const BOOKMARK_COLS = `
   b.links_json, b.media_count, b.media_json, b.link_count,
   b.like_count, b.repost_count, b.reply_count,
   b.quote_count, b.bookmark_count, b.view_count, b.in_wiki,
-  b.quoted_tweet_json
+  b.quoted_tweet_json, b.quoted_text
 `;
 
 function sortClause(dir: string = 'desc'): string {
@@ -700,15 +710,72 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     readStatus: params.get('readStatus') || (unread === 'true' ? 'unread' : unread === 'false' ? 'read' : undefined),
   };
 
-  const { where, params: qp } = buildWhere(filters);
+  const originalPlan = buildSearchPlan(filters.q ?? '');
+  filters.author ??= originalPlan.author;
+  filters.category ??= originalPlan.category;
+  filters.domain ??= originalPlan.domain;
+  const baseFilters = { ...filters, q: undefined };
+  const { where: baseWhere, params: baseParams } = buildWhere(baseFilters);
+  let plan = originalPlan;
+  let correction: string | null = null;
+  let total = 0;
 
-  const countRows = db.exec(`SELECT COUNT(*) FROM bookmarks b ${where}`, qp);
-  const total = Number(countRows[0]?.values?.[0]?.[0] ?? 0);
+  const searchWhere = (query: string): { where: string; params: (string | number)[] } => {
+    if (!query) return { where: baseWhere, params: baseParams };
+    const condition = `bookmarks_fts MATCH ?`;
+    const where = baseWhere
+      ? `${baseWhere} AND ${condition}`
+      : `WHERE ${condition}`;
+    return { where, params: [...baseParams, query] };
+  };
 
-  const sql = `SELECT ${BOOKMARK_COLS} FROM bookmarks b ${where} ${sortClause(filters.sort)} LIMIT ? OFFSET ?`;
-  const allParams = [...qp, filters.limit!, filters.offset!];
+  let activeQuery = plan.strictQuery;
+  let active = searchWhere(activeQuery);
+  const join = plan.broadQuery ? 'JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid' : '';
+  let countRows = db.exec(`SELECT COUNT(*) FROM bookmarks b ${join} ${active.where}`, active.params);
+  total = Number(countRows[0]?.values?.[0]?.[0] ?? 0);
+
+  if (plan.broadQuery && total === 0) {
+    correction = suggestSearchCorrection(db, plan);
+    if (correction) {
+      plan = buildSearchPlan(correction);
+      activeQuery = plan.strictQuery;
+      active = searchWhere(activeQuery);
+      countRows = db.exec(
+        `SELECT COUNT(*) FROM bookmarks b JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid ${active.where}`,
+        active.params,
+      );
+      total = Number(countRows[0]?.values?.[0]?.[0] ?? 0);
+    }
+  }
+  if (plan.broadQuery && total === 0 && plan.broadQuery !== plan.strictQuery) {
+    activeQuery = plan.broadQuery;
+    active = searchWhere(activeQuery);
+    countRows = db.exec(
+      `SELECT COUNT(*) FROM bookmarks b JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid ${active.where}`,
+      active.params,
+    );
+    total = Number(countRows[0]?.values?.[0]?.[0] ?? 0);
+  }
+
+  const searchOrder = plan.broadQuery
+    ? `ORDER BY
+         CASE WHEN b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?) THEN 0 ELSE 1 END,
+         CASE WHEN instr(lower(b.text), ?) > 0 THEN 0 ELSE 1 END,
+         bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) ASC,
+         CASE WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at ELSE b.posted_at END DESC`
+    : sortClause(filters.sort);
+  const sql = `SELECT ${BOOKMARK_COLS} FROM bookmarks b
+    ${plan.broadQuery ? 'JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid' : ''}
+    ${active.where} ${searchOrder} LIMIT ? OFFSET ?`;
+  const rankingParams = plan.broadQuery ? [plan.strictQuery, plan.phrase] : [];
+  const allParams = [...active.params, ...rankingParams, filters.limit!, filters.offset!];
   const rows = db.exec(sql, allParams);
   const bookmarks = (rows[0]?.values ?? []).map(mapRow);
+
+  if (plan.tokens.length && bookmarks.length) {
+    attachSearchMatches(db, bookmarks, plan);
+  }
 
   // Attach collections to each bookmark
   if (bookmarks.length) {
@@ -741,7 +808,52 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     }
   }
 
-  return { bookmarks, total, limit: filters.limit, offset: filters.offset };
+  return {
+    bookmarks,
+    total,
+    limit: filters.limit,
+    offset: filters.offset,
+    search: filters.q ? {
+      query: originalPlan.normalized,
+      effectiveQuery: correction ?? originalPlan.text,
+      correction,
+      tokens: plan.tokens,
+      mode: activeQuery === plan.strictQuery ? 'all words' : 'related matches',
+    } : null,
+  };
+}
+
+function attachSearchMatches(db: Database, bookmarks: Record<string, unknown>[], plan: SearchPlan): void {
+  const ids = bookmarks.map((bookmark) => String(bookmark.id));
+  const placeholders = ids.map(() => '?').join(',');
+  const noteRows = db.exec(
+    `SELECT bookmark_id, note FROM bookmark_notes WHERE bookmark_id IN (${placeholders})`,
+    ids,
+  )[0]?.values ?? [];
+  const highlightRows = db.exec(
+    `SELECT bookmark_id, group_concat(text_fragment, ' ') FROM bookmark_highlights
+     WHERE bookmark_id IN (${placeholders}) GROUP BY bookmark_id`,
+    ids,
+  )[0]?.values ?? [];
+  const notes = new Map(noteRows.map((row) => [String(row[0]), String(row[1] ?? '')]));
+  const highlights = new Map(highlightRows.map((row) => [String(row[0]), String(row[1] ?? '')]));
+  const matches = (value: unknown) => {
+    const haystack = String(value ?? '').toLowerCase();
+    return plan.tokens.some((token) => haystack.includes(token));
+  };
+
+  for (const bookmark of bookmarks) {
+    const id = String(bookmark.id);
+    const fields: string[] = [];
+    if (matches(bookmark.text)) fields.push('tweet');
+    if (matches(bookmark.quotedText)) fields.push('quoted post');
+    if (matches(notes.get(id))) fields.push('note');
+    if (matches(highlights.get(id))) fields.push('highlight');
+    if (matches(bookmark.authorHandle) || matches(bookmark.authorName)) fields.push('author');
+    if (matches((bookmark.links as string[] | undefined)?.join(' '))) fields.push('link');
+    if (matches((bookmark.domains as string[] | undefined)?.join(' '))) fields.push('domain');
+    bookmark.searchMatch = fields;
+  }
 }
 
 function handleBookmarkById(db: Database, id: string): unknown {
@@ -974,6 +1086,7 @@ async function handleApi(
         `INSERT OR REPLACE INTO bookmark_notes (bookmark_id, note, updated_at) VALUES (?, ?, ?)`,
         [id, note ?? '', now],
       );
+      refreshBookmarkSearchRow(db, id);
       saveDb(db, dbPath);
       sendJson(res, { success: true, updatedAt: now });
       return;
@@ -1040,13 +1153,14 @@ async function handleApi(
 
       db.run('BEGIN TRANSACTION');
       try {
+        const searchRowId = db.exec('SELECT rowid FROM bookmarks WHERE id = ?', [id])[0]?.values?.[0]?.[0];
+        if (searchRowId != null) db.run('DELETE FROM bookmarks_fts WHERE rowid = ?', [searchRowId]);
         db.run(`DELETE FROM bookmark_notes WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM bookmark_collections WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM bookmark_read_status WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM bookmark_highlights WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM dead_links WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM bookmarks WHERE id = ?`, [id]);
-        db.run(`INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('rebuild')`);
         db.run('COMMIT');
       } catch (err) {
         db.run('ROLLBACK');
@@ -1217,9 +1331,12 @@ async function handleApi(
         const createdAt = r[3] as string;
         let newCount = 0;
         try {
+          const plan = buildSearchPlan(query);
           const countRows = db.exec(
-            `SELECT COUNT(*) FROM bookmarks b WHERE b.id IN (SELECT b2.id FROM bookmarks_fts(?) b2) AND COALESCE(b.bookmarked_at, b.posted_at) > ?`,
-            [query, createdAt],
+            `SELECT COUNT(*) FROM bookmarks b
+             WHERE b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?)
+               AND COALESCE(b.bookmarked_at, b.posted_at) > ?`,
+            [plan.broadQuery, createdAt],
           );
           newCount = Number(countRows[0]?.values[0]?.[0] ?? 0);
         } catch {}
@@ -1268,6 +1385,7 @@ async function handleApi(
       const color = body.color || 'yellow';
       const now = new Date().toISOString();
       db.run(`INSERT INTO bookmark_highlights (bookmark_id, text_fragment, color, created_at) VALUES (?, ?, ?, ?)`, [bookmarkId, textFragment, color, now]);
+      refreshBookmarkSearchRow(db, bookmarkId);
       saveDb(db, dbPath);
       sendJson(res, { success: true });
       return;
@@ -1276,7 +1394,9 @@ async function handleApi(
     const highlightDeleteMatch = pathname.match(/^\/api\/highlights\/(\d+)$/);
     if (req.method === 'DELETE' && highlightDeleteMatch) {
       const id = Number(highlightDeleteMatch[1]);
+      const bookmarkId = db.exec('SELECT bookmark_id FROM bookmark_highlights WHERE id = ?', [id])[0]?.values?.[0]?.[0];
       db.run(`DELETE FROM bookmark_highlights WHERE id = ?`, [id]);
+      if (bookmarkId) refreshBookmarkSearchRow(db, String(bookmarkId));
       saveDb(db, dbPath);
       sendJson(res, { success: true });
       return;

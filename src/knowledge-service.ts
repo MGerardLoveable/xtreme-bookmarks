@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Database } from 'sql.js';
+import { buildSearchPlan } from './search.js';
 import { openDb, saveDb } from './db.js';
 import { initBrainSchema, rowToBrainArtifact, brainArtifactToKnowledgeItem, brainSpaceToKnowledgeTopic, upsertBrainArtifactFromDb, listBrainSpacesFromDb } from './brain.js';
 import { listFiles, readMd } from './fs.js';
@@ -100,6 +101,7 @@ export function retrieveKnowledgeEvidenceFromDb(db: Database, query: string, opt
   const terms = termsForQuery(query);
   if (terms.length === 0) return [];
   const candidates: KnowledgeEvidence[] = [];
+  const searchPlan = buildSearchPlan(query);
   const matches = (parts: unknown[]) => terms.some((term) => parts.some((part) => String(part ?? '').toLowerCase().includes(term)));
 
   if (tableExists(db, 'bookmarks')) {
@@ -112,7 +114,7 @@ export function retrieveKnowledgeEvidenceFromDb(db: Database, query: string, opt
           WHERE bookmarks_fts MATCH ?
           ORDER BY bm25(bookmarks_fts, 5.0, 1.0, 1.0) ASC
           LIMIT ?
-        `, [terms.join(' OR '), Math.max(limit * 3, 50)])
+        `, [searchPlan.broadQuery, Math.max(limit * 3, 50)])
       : db.exec(`SELECT id, url, text, author_handle, author_name, COALESCE(bookmarked_at, posted_at, synced_at), 0 FROM bookmarks LIMIT ?`, [Math.max(limit * 20, 500)]);
     for (const row of rows[0]?.values ?? []) {
       if (!matches([row[2], row[3], row[4]])) continue;
