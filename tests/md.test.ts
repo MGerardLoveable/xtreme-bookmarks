@@ -151,7 +151,7 @@ test('local evidence fallback returns a structured, actionable research brief', 
   assert.match(answer, /## Bottom Line/);
   assert.match(answer, /- \[ \] \*\*Now - Review the top matches\*\*/);
   assert.match(answer, /Persistent memory for coding agents/);
-  assert.match(answer, /\[source\]\(https:\/\/example\.com\/agent-memory\)/);
+  assert.match(answer, /\[@researcher\]\(https:\/\/example\.com\/agent-memory\)/);
   assert.match(answer, /This is retrieval, not model synthesis/i);
 });
 
@@ -220,6 +220,8 @@ test('buildAskPrompt: requests a complete decision-ready research brief', () => 
   assert.match(prompt, /## Step-by-Step Plan/);
   assert.match(prompt, /## Risks, Gaps, and Contradictions/);
   assert.match(prompt, /## Bottom Line/);
+  assert.match(prompt, /\[@authorHandle\]\(https:\/\/\.\.\.\)/);
+  assert.match(prompt, /never the\s+generic word "source"/);
   assert.match(prompt, /Never nest links/);
   assert.match(prompt, /900-1,600\s+words/);
 });

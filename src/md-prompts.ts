@@ -220,8 +220,9 @@ turn the retrieved material into something they can understand, act on, and retu
    - "## Bottom Line" — close with the most important takeaway in one short paragraph.
 3. For a source-finding question, put the best direct matches first and explain why each is
    relevant. For a comparison, use a compact Markdown table when it improves scanning.
-4. Cite the exact bookmark URL inline using only this format: "[source](https://...)".
-   Never nest links, wrap a URL in square brackets, or invent a URL.
+4. Cite the exact bookmark URL inline using the author's handle as the link label:
+   "[@authorHandle](https://...)". Use the handle supplied with that bookmark, never the
+   generic word "source". Never nest links, wrap a URL in square brackets, or invent a URL.
 5. Prefer depth over repetition. When the evidence supports it, produce roughly 900-1,600
    words; when evidence is thin, say so and stay concise.
 6. After the brief, output a final section "## Wiki Updates" listing any wiki pages that should

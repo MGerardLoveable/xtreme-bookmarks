@@ -244,11 +244,20 @@ export function AskView(root) {
     ` : '';
 
     const isError = String(turn.answer || '').startsWith('⚠︎');
+    const citationLabels = Object.fromEntries(
+      (turn.evidence || [])
+        .filter((item) => item.url && item.provenance?.sourceLabel)
+        .map((item) => [item.url, item.provenance.sourceLabel]),
+    );
     const answerBlock = turn.answer ? `
       <div class="ask-answer${isError ? ' ask-answer-error' : ''}">
         ${isError
           ? escape(turn.answer)
-          : renderAskDocument(turn.answer, { prefix: `ask-${idx}`, fallbackTitle: turn.question })}
+          : renderAskDocument(turn.answer, {
+            prefix: `ask-${idx}`,
+            fallbackTitle: turn.question,
+            citationLabels,
+          })}
       </div>
     ` : '';
 

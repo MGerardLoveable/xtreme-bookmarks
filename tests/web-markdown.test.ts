@@ -88,6 +88,23 @@ test('Ask citation normalizer repairs Grok nested source links', () => {
   const malformed = '([source]([https://x.com/example/status/123))](x.com/example/status/123)))';
   assert.equal(
     normalizeAskMarkdown(malformed),
-    '[source](https://x.com/example/status/123)',
+    '[@example](https://x.com/example/status/123)',
+  );
+});
+
+test('Ask citations use evidence author labels for shortened links', () => {
+  assert.equal(
+    normalizeAskMarkdown(
+      'Read [source](https://t.co/abc123).',
+      { 'https://t.co/abc123': '@researcher' },
+    ),
+    'Read [@researcher](https://t.co/abc123).',
+  );
+});
+
+test('Ask citations keep a neutral label when no author can be identified', () => {
+  assert.equal(
+    normalizeAskMarkdown('Read [source](https://example.com/report).'),
+    'Read [source](https://example.com/report).',
   );
 });

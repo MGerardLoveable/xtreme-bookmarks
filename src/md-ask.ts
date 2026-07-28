@@ -169,6 +169,18 @@ function oneLine(value: string, maxLength = 360): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
+function citationAuthor(url: string, label: string): string {
+  if (/^@[A-Za-z0-9_]{1,15}$/.test(label)) return label;
+  try {
+    const parsed = new URL(url);
+    if (/^(?:www\.)?(?:x|twitter)\.com$/i.test(parsed.hostname)) {
+      const handle = decodeURIComponent(parsed.pathname.split('/').filter(Boolean)[0] ?? '');
+      if (/^[A-Za-z0-9_]{1,15}$/.test(handle)) return `@${handle}`;
+    }
+  } catch { /* use a neutral fallback below */ }
+  return 'source';
+}
+
 function buildLocalEvidenceAnswer(
   question: string,
   evidence: KnowledgeEvidence[],
@@ -192,7 +204,7 @@ function buildLocalEvidenceAnswer(
   const findings = localSources.length > 0
     ? localSources.flatMap((item, index) => {
       const label = item.label ? ` - ${oneLine(item.label, 80)}` : '';
-      const citation = item.url ? ` ([source](${item.url}))` : '';
+      const citation = item.url ? ` ([${citationAuthor(item.url, item.label)}](${item.url}))` : '';
       return [
         `${index + 1}. **${oneLine(item.title, 140)}**${label}`,
         `   ${oneLine(item.detail)}${citation}`,

@@ -33,8 +33,29 @@ function slug(value) {
     .slice(0, 48) || 'section';
 }
 
-export function normalizeAskMarkdown(value) {
-  return String(value ?? '')
+function citationAuthor(url, citationLabels = {}) {
+  const supplied = String(citationLabels[url] || '').trim();
+  if (/^@[A-Za-z0-9_]{1,15}$/.test(supplied)) return supplied;
+
+  try {
+    const parsed = new URL(url);
+    if (/^(?:www\.)?(?:x|twitter)\.com$/i.test(parsed.hostname)) {
+      const handle = decodeURIComponent(parsed.pathname.split('/').filter(Boolean)[0] || '');
+      const reserved = new Set(['i', 'home', 'search', 'explore', 'messages', 'notifications', 'settings', 'compose']);
+      if (/^[A-Za-z0-9_]{1,15}$/.test(handle) && !reserved.has(handle.toLowerCase())) {
+        return `@${handle}`;
+      }
+    }
+  } catch {
+    // Keep the generic label when the URL is malformed.
+  }
+
+  const fromLabel = supplied.match(/\bfrom\s+@?([A-Za-z0-9_]{1,15})$/i);
+  return fromLabel ? `@${fromLabel[1]}` : '';
+}
+
+export function normalizeAskMarkdown(value, citationLabels = {}) {
+  const normalized = String(value ?? '')
     // Repair the nested citation form occasionally emitted by Grok:
     // ([source]([https://x.com/...))](x.com/...)))
     .replace(
@@ -43,10 +64,15 @@ export function normalizeAskMarkdown(value) {
     )
     .replace(/\[source\]\(\[(https?:\/\/[^\]\s]+)\]\)/gi, '[source]($1)')
     .replace(/\(\[source\]\((https?:\/\/[^)\s]+)\)\)/gi, '[source]($1)');
+
+  return normalized.replace(/\[source\]\((https?:\/\/[^)\s]+)\)/gi, (match, url) => {
+    const author = citationAuthor(url, citationLabels);
+    return author ? `[${author}](${url})` : match;
+  });
 }
 
-export function parseAskDocument(value, fallbackTitle = 'Research answer') {
-  const markdown = normalizeAskMarkdown(value).trim();
+export function parseAskDocument(value, fallbackTitle = 'Research answer', citationLabels = {}) {
+  const markdown = normalizeAskMarkdown(value, citationLabels).trim();
   const lines = markdown.split(/\r?\n/);
   let title = fallbackTitle;
   const bodyLines = [];
@@ -110,7 +136,7 @@ export function parseAskDocument(value, fallbackTitle = 'Research answer') {
 
 export function renderAskDocument(value, options = {}) {
   const prefix = slug(options.prefix || 'ask-result');
-  const document = parseAskDocument(value, options.fallbackTitle);
+  const document = parseAskDocument(value, options.fallbackTitle, options.citationLabels);
   const sectionIds = new Map();
 
   const sections = document.sections.map((section, index) => {
