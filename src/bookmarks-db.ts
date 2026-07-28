@@ -8,8 +8,9 @@ import { classifyCorpus, formatClassificationSummary } from './bookmark-classify
 import type { ClassificationSummary } from './bookmark-classify.js';
 import { createHash } from 'node:crypto';
 import { buildSearchPlan, levenshteinDistance, type SearchPlan } from './search.js';
+import { ensureActivationSchema } from './activation.js';
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 export interface SearchResult {
   id: string;
@@ -258,6 +259,7 @@ function initSchema(db: Database): void {
 
   createSearchAuxiliaryTables(db);
   createSearchTable(db);
+  ensureActivationSchema(db);
 
   db.run(`REPLACE INTO meta VALUES ('schema_version', '${SCHEMA_VERSION}')`);
 }
@@ -319,6 +321,7 @@ export function ensureMigrations(db: Database): void {
     createSearchTable(db);
     if (tableExists(db, 'bookmarks')) rebuildBookmarkSearchIndex(db);
   }
+  ensureActivationSchema(db);
   if (version < SCHEMA_VERSION) {
     db.run(`REPLACE INTO meta VALUES ('schema_version', '${SCHEMA_VERSION}')`);
   }

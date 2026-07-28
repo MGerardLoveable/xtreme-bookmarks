@@ -17,6 +17,7 @@ export function XFeedView(root) {
   let lastWarningToastAt = '';
   let lastDelayedToastKey = '';
   let refreshController = null;
+  let cycle = null;
 
   root.innerHTML = `
     <div class="xfeed">
@@ -75,6 +76,15 @@ export function XFeedView(root) {
             </div>
           </div>
         </header>
+        <section class="radar-intelligence" id="radar-intelligence">
+          <div>
+            <span class="detail-section-kicker">Brain Cycle</span>
+            <strong>Library intelligence</strong>
+            <small id="radar-cycle-summary">Checking enrichment state...</small>
+          </div>
+          <div class="radar-intelligence-metrics" id="radar-cycle-metrics"></div>
+          <button class="btn" id="radar-run-cycle" type="button"><span data-icon="sparkles"></span>Run cycle</button>
+        </section>
         <div class="xfeed-rule" id="xfeed-rule"></div>
         <div class="xfeed-account-filter" id="xfeed-account-filter" hidden></div>
         <div class="xfeed-list" id="xfeed-list"></div>
@@ -455,20 +465,39 @@ export function XFeedView(root) {
     root.querySelectorAll('[data-filter]').forEach((el) => el.classList.toggle('active', el.dataset.filter === filter));
   }
 
+  function renderCycle() {
+    const summary = $('#radar-cycle-summary', root);
+    const metrics = $('#radar-cycle-metrics', root);
+    if (!cycle) {
+      summary.textContent = 'Enrichment state unavailable';
+      metrics.innerHTML = '';
+      return;
+    }
+    summary.textContent = cycle.latest?.summary || 'Ready for the first enrichment pass';
+    metrics.innerHTML = [
+      ['Distilled', cycle.enriched || 0],
+      ['Pending', cycle.pending || 0],
+      ['Stale', cycle.staleClaims || 0],
+      ['Tensions', cycle.candidateContradictions || 0],
+    ].map(([label, value]) => `<span><strong>${fmtNumber(value)}</strong><small>${label}</small></span>`).join('');
+  }
+
   async function refresh() {
     refreshController?.abort();
     refreshController = new AbortController();
     const requestOptions = { signal: refreshController.signal };
     const feedLimit = selectedAccount ? 200 : 80;
-    const [watchlist, streamStatus, feed] = await Promise.all([
+    const [watchlist, streamStatus, feed, cycleStatus] = await Promise.all([
       api.xWatchlist(requestOptions),
       api.xStreamStatus(requestOptions),
       api.xFeed(feedLimit, filter, selectedAccount, requestOptions),
+      api.brainCycle().catch(() => null),
     ]);
     accounts = watchlist.accounts || [];
     if (selectedAccount && !accounts.some((account) => account.handle === selectedAccount)) selectedAccount = '';
     status = streamStatus;
     items = feed.items || [];
+    cycle = cycleStatus;
     renderStatus();
     if (status?.lastPollWarning && status?.lastPollAt && status.lastPollAt !== lastWarningToastAt) {
       lastWarningToastAt = status.lastPollAt;
@@ -483,6 +512,7 @@ export function XFeedView(root) {
     renderRule();
     renderAccountFilter();
     renderFeed();
+    renderCycle();
   }
 
   async function withBusy(button, label, fn, options = {}) {
@@ -557,6 +587,12 @@ export function XFeedView(root) {
     const result = await api.backfillAllXWatchAccounts({ fast: true, async: true });
     toast(result.alreadyRunning ? 'Fresh update is already running. The feed will keep refreshing.' : 'Fresh update started. The feed will refresh while it checks your watchlist.');
   }));
+  $('#radar-run-cycle', root).addEventListener('click', (event) => withBusy(event.currentTarget, 'Distilling...', async () => {
+    const result = await api.runBrainCycle(75);
+    cycle = result.status;
+    renderCycle();
+    toast(result.result?.summary || 'Brain Cycle complete');
+  }, { refresh: false }));
   $('#xfeed-clear-feed', root).addEventListener('click', (event) => withBusy(event.currentTarget, 'Clearing...', async () => {
     const label = selectedAccount ? `@${selectedAccount}` : 'the whole Radar';
     if (!confirm(`Remove all saved items from ${label}? Fresh updates will keep them removed.`)) return;

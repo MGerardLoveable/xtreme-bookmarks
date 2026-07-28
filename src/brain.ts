@@ -8,6 +8,8 @@ import type { KnowledgeItem, KnowledgeItemKind, KnowledgeTopic } from './types.j
 
 export type BrainAgentType = 'repo_watcher' | 'research_scout' | 'memory_curator';
 export type BrainWorkflowId = 'capture' | 'distill' | 'connect' | 'watch' | 'review' | 'repair' | 'publish';
+export type BrainSpaceKind = 'project' | 'question' | 'dossier' | 'topic';
+export type BrainSpaceStatus = 'active' | 'incubating' | 'complete' | 'archived';
 
 export interface BrainSpaceInput {
   name: string;
@@ -16,13 +18,22 @@ export interface BrainSpaceInput {
   category?: string | null;
   domain?: string | null;
   collection?: string | null;
+  kind?: BrainSpaceKind;
+  status?: BrainSpaceStatus;
+  focusQuestion?: string;
 }
 
-export interface BrainSpace extends Required<Omit<BrainSpaceInput, 'category' | 'domain' | 'collection'>> {
+export interface BrainSpace {
   id: string;
+  name: string;
+  description: string;
+  keywords: string[];
   category: string | null;
   domain: string | null;
   collection: string | null;
+  kind: BrainSpaceKind;
+  status: BrainSpaceStatus;
+  focusQuestion: string;
   createdAt: string;
   updatedAt: string;
   lastSeededAt: string | null;
@@ -81,6 +92,11 @@ export interface BrainSeedResult {
   space: BrainSpace;
   matched: number;
   added: number;
+}
+
+export interface BrainSpaceDuplicateGroup {
+  canonicalId: string;
+  duplicateIds: string[];
 }
 
 export interface BrainDashboard {
@@ -344,8 +360,14 @@ export function initBrainSchema(db: Database): void {
     updated_at TEXT NOT NULL,
     last_seeded_at TEXT,
     last_agent_run_at TEXT,
-    page_path TEXT NOT NULL
+    page_path TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'project',
+    status TEXT NOT NULL DEFAULT 'active',
+    focus_question TEXT NOT NULL DEFAULT ''
   )`);
+  try { db.run(`ALTER TABLE brain_spaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'project'`); } catch {}
+  try { db.run(`ALTER TABLE brain_spaces ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
+  try { db.run(`ALTER TABLE brain_spaces ADD COLUMN focus_question TEXT NOT NULL DEFAULT ''`); } catch {}
   db.run(`CREATE TABLE IF NOT EXISTS brain_space_bookmarks (
     space_id TEXT NOT NULL REFERENCES brain_spaces(id) ON DELETE CASCADE,
     bookmark_id TEXT NOT NULL,
@@ -472,6 +494,7 @@ export function initBrainSchema(db: Database): void {
     updated_at TEXT NOT NULL
   )`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_brain_bookmarks_space ON brain_space_bookmarks(space_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_brain_bookmarks_bookmark ON brain_space_bookmarks(bookmark_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_brain_findings_space ON brain_agent_findings(space_id, resolved)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_brain_runs_started ON brain_agent_runs(started_at)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_brain_artifacts_space ON brain_artifacts(space_id, updated_at)`);
@@ -504,9 +527,12 @@ function rowToSpace(row: unknown[]): BrainSpace {
     lastSeededAt: (row[9] as string) ?? null,
     lastAgentRunAt: (row[10] as string) ?? null,
     pagePath: String(row[11] ?? ''),
-    bookmarkCount: Number(row[12] ?? 0),
-    repoCount: Number(row[13] ?? 0),
-    openFindings: Number(row[14] ?? 0),
+    kind: row[12] === 'question' || row[12] === 'dossier' || row[12] === 'topic' ? row[12] : 'project',
+    status: row[13] === 'incubating' || row[13] === 'complete' || row[13] === 'archived' ? row[13] : 'active',
+    focusQuestion: String(row[14] ?? ''),
+    bookmarkCount: Number(row[15] ?? 0),
+    repoCount: Number(row[16] ?? 0),
+    openFindings: Number(row[17] ?? 0),
   };
 }
 
@@ -523,6 +549,7 @@ export function listBrainSpacesFromDb(db: Database): BrainSpace[] {
     SELECT
       s.id, s.name, s.description, s.keywords_json, s.category, s.domain, s.collection,
       s.created_at, s.updated_at, s.last_seeded_at, s.last_agent_run_at, s.page_path,
+      s.kind, s.status, s.focus_question,
       (SELECT COUNT(*) FROM brain_space_bookmarks sb WHERE sb.space_id = s.id) as bookmark_count,
       (SELECT COUNT(*) FROM brain_space_repos sr WHERE sr.space_id = s.id) as repo_count,
       (SELECT COUNT(*) FROM brain_agent_findings f WHERE f.space_id = s.id AND f.resolved = 0) as open_findings
@@ -530,6 +557,150 @@ export function listBrainSpacesFromDb(db: Database): BrainSpace[] {
     ORDER BY s.updated_at DESC, s.name COLLATE NOCASE
   `);
   return (rows[0]?.values ?? []).map(rowToSpace);
+}
+
+function brainSpaceFingerprint(space: BrainSpace): string {
+  return JSON.stringify({
+    name: space.name.trim().toLowerCase(),
+    description: space.description.trim(),
+    keywords: [...space.keywords].map((keyword) => keyword.trim().toLowerCase()).sort(),
+    category: space.category?.trim().toLowerCase() ?? null,
+    domain: space.domain?.trim().toLowerCase() ?? null,
+    collection: space.collection?.trim().toLowerCase() ?? null,
+    kind: space.kind,
+    status: space.status,
+    focusQuestion: space.focusQuestion.trim(),
+  });
+}
+
+function manualBrainPageContent(content: string): string {
+  const managedPattern = new RegExp(
+    `${MANAGED_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${MANAGED_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+  );
+  return content.replace(managedPattern, '').trim();
+}
+
+export async function findExactDuplicateBrainSpaceGroupsFromDb(
+  db: Database,
+): Promise<BrainSpaceDuplicateGroup[]> {
+  const spaces = listBrainSpacesFromDb(db);
+  const groups = new Map<string, BrainSpace[]>();
+  for (const space of spaces) {
+    let pageKey = `missing:${space.id}`;
+    if (space.pagePath && await pathExists(space.pagePath)) {
+      pageKey = manualBrainPageContent(await readMd(space.pagePath));
+    }
+    const key = `${brainSpaceFingerprint(space)}\u001f${pageKey}`;
+    const group = groups.get(key) ?? [];
+    group.push(space);
+    groups.set(key, group);
+  }
+
+  return [...groups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => {
+      const sorted = [...group].sort((a, b) => {
+        const aBase = a.id === brainSlug(a.name) ? 0 : 1;
+        const bBase = b.id === brainSlug(b.name) ? 0 : 1;
+        return aBase - bBase || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+      });
+      return {
+        canonicalId: sorted[0].id,
+        duplicateIds: sorted.slice(1).map((space) => space.id),
+      };
+    });
+}
+
+export function consolidateExactDuplicateBrainSpacesFromDb(
+  db: Database,
+  groups: BrainSpaceDuplicateGroup[],
+): number {
+  if (!groups.length) return 0;
+  let consolidated = 0;
+  db.run('BEGIN');
+  try {
+    for (const group of groups) {
+      for (const duplicateId of group.duplicateIds) {
+        db.run(
+          `UPDATE brain_space_bookmarks
+           SET source = CASE
+                 WHEN source = 'manual'
+                   OR EXISTS (
+                     SELECT 1 FROM brain_space_bookmarks duplicate
+                     WHERE duplicate.space_id = ?
+                       AND duplicate.bookmark_id = brain_space_bookmarks.bookmark_id
+                       AND duplicate.source = 'manual'
+                   )
+                 THEN 'manual' ELSE source END,
+               score = MAX(score, COALESCE((
+                 SELECT duplicate.score FROM brain_space_bookmarks duplicate
+                 WHERE duplicate.space_id = ?
+                   AND duplicate.bookmark_id = brain_space_bookmarks.bookmark_id
+               ), score))
+           WHERE space_id = ?
+             AND bookmark_id IN (
+               SELECT bookmark_id FROM brain_space_bookmarks WHERE space_id = ?
+             )`,
+          [duplicateId, duplicateId, group.canonicalId, duplicateId],
+        );
+        db.run(
+          `INSERT OR IGNORE INTO brain_space_bookmarks
+             (space_id, bookmark_id, source, score, added_at)
+           SELECT ?, bookmark_id, source, score, added_at
+           FROM brain_space_bookmarks WHERE space_id = ?`,
+          [group.canonicalId, duplicateId],
+        );
+        db.run('DELETE FROM brain_space_bookmarks WHERE space_id = ?', [duplicateId]);
+
+        db.run(
+          `INSERT OR IGNORE INTO brain_space_repos (
+             space_id, repo, owner, name, source, created_at, last_checked_at,
+             last_release_id, last_commit_sha
+           )
+           SELECT ?, repo, owner, name, source, created_at, last_checked_at,
+                  last_release_id, last_commit_sha
+           FROM brain_space_repos WHERE space_id = ?`,
+          [group.canonicalId, duplicateId],
+        );
+        db.run('DELETE FROM brain_space_repos WHERE space_id = ?', [duplicateId]);
+
+        if (tableExists(db, 'project_item_roles')) {
+          db.run(
+            `INSERT OR IGNORE INTO project_item_roles
+               (space_id, bookmark_id, role, created_at, updated_at)
+             SELECT ?, bookmark_id, role, created_at, updated_at
+             FROM project_item_roles WHERE space_id = ?`,
+            [group.canonicalId, duplicateId],
+          );
+          db.run('DELETE FROM project_item_roles WHERE space_id = ?', [duplicateId]);
+        }
+
+        db.run(
+          `UPDATE brain_artifacts
+           SET space_id = NULL
+           WHERE space_id = ?
+             AND EXISTS (
+               SELECT 1 FROM brain_artifacts canonical
+               WHERE canonical.space_id = ?
+                 AND canonical.source_type = brain_artifacts.source_type
+                 AND canonical.source_id = brain_artifacts.source_id
+             )`,
+          [duplicateId, group.canonicalId],
+        );
+        db.run('UPDATE brain_artifacts SET space_id = ? WHERE space_id = ?', [group.canonicalId, duplicateId]);
+        db.run('UPDATE brain_agent_runs SET space_id = ? WHERE space_id = ?', [group.canonicalId, duplicateId]);
+        db.run('UPDATE brain_agent_findings SET space_id = ? WHERE space_id = ?', [group.canonicalId, duplicateId]);
+        db.run('UPDATE brain_workflow_runs SET space_id = ? WHERE space_id = ?', [group.canonicalId, duplicateId]);
+        db.run('DELETE FROM brain_spaces WHERE id = ?', [duplicateId]);
+        consolidated += 1;
+      }
+    }
+    db.run('COMMIT');
+    return consolidated;
+  } catch (error) {
+    db.run('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function listBrainSpaces(): Promise<BrainSpace[]> {
@@ -547,6 +718,7 @@ function getSpaceFromDb(db: Database, idOrName: string): BrainSpace | null {
     SELECT
       s.id, s.name, s.description, s.keywords_json, s.category, s.domain, s.collection,
       s.created_at, s.updated_at, s.last_seeded_at, s.last_agent_run_at, s.page_path,
+      s.kind, s.status, s.focus_question,
       (SELECT COUNT(*) FROM brain_space_bookmarks sb WHERE sb.space_id = s.id) as bookmark_count,
       (SELECT COUNT(*) FROM brain_space_repos sr WHERE sr.space_id = s.id) as repo_count,
       (SELECT COUNT(*) FROM brain_agent_findings f WHERE f.space_id = s.id AND f.resolved = 0) as open_findings
@@ -563,14 +735,29 @@ export async function createBrainSpace(input: BrainSpaceInput): Promise<BrainSpa
   if (!name) throw new Error('Sub-Brain name is required.');
   const { db, dbPath } = await openBrainDb();
   try {
+    const kind = input.kind ?? 'project';
+    const existingRows = db.exec(
+      `SELECT id FROM brain_spaces
+       WHERE lower(trim(name)) = lower(trim(?))
+         AND COALESCE(kind, 'project') = ?
+         AND COALESCE(status, 'active') != 'archived'
+       ORDER BY created_at, id
+       LIMIT 1`,
+      [name, kind],
+    );
+    const existingId = existingRows[0]?.values[0]?.[0];
+    if (typeof existingId === 'string') return getSpaceFromDb(db, existingId)!;
+
     let id = brainSlug(name);
     let suffix = 2;
     while (getSpaceFromDb(db, id)) id = `${brainSlug(name)}-${suffix++}`;
     const now = nowIso();
     const pagePath = spacePagePath(id);
     db.run(
-      `INSERT INTO brain_spaces (id, name, description, keywords_json, category, domain, collection, created_at, updated_at, page_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO brain_spaces (
+         id, name, description, keywords_json, category, domain, collection,
+         created_at, updated_at, page_path, kind, status, focus_question
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         name,
@@ -582,6 +769,9 @@ export async function createBrainSpace(input: BrainSpaceInput): Promise<BrainSpa
         now,
         now,
         pagePath,
+        kind,
+        input.status ?? 'active',
+        input.focusQuestion?.trim() ?? '',
       ],
     );
     saveDb(db, dbPath);
@@ -599,7 +789,8 @@ export async function updateBrainSpace(id: string, input: Partial<BrainSpaceInpu
     const keywords = input.keywords === undefined ? current.keywords : normalizeKeywords(input.keywords);
     db.run(
       `UPDATE brain_spaces
-       SET name = ?, description = ?, keywords_json = ?, category = ?, domain = ?, collection = ?, updated_at = ?
+       SET name = ?, description = ?, keywords_json = ?, category = ?, domain = ?,
+           collection = ?, kind = ?, status = ?, focus_question = ?, updated_at = ?
        WHERE id = ?`,
       [
         input.name?.trim() || current.name,
@@ -608,6 +799,9 @@ export async function updateBrainSpace(id: string, input: Partial<BrainSpaceInpu
         input.category === undefined ? current.category : input.category,
         input.domain === undefined ? current.domain : input.domain,
         input.collection === undefined ? current.collection : input.collection,
+        input.kind ?? current.kind,
+        input.status ?? current.status,
+        input.focusQuestion === undefined ? current.focusQuestion : input.focusQuestion,
         nowIso(),
         current.id,
       ],
@@ -628,6 +822,11 @@ export async function deleteBrainSpace(id: string): Promise<void> {
     db.run(`DELETE FROM brain_agent_runs WHERE space_id = ?`, [space.id]);
     db.run(`DELETE FROM brain_space_repos WHERE space_id = ?`, [space.id]);
     db.run(`DELETE FROM brain_space_bookmarks WHERE space_id = ?`, [space.id]);
+    if (tableExists(db, 'project_item_roles')) {
+      db.run(`DELETE FROM project_item_roles WHERE space_id = ?`, [space.id]);
+    }
+    db.run(`UPDATE brain_artifacts SET space_id = NULL WHERE space_id = ?`, [space.id]);
+    db.run(`UPDATE brain_workflow_runs SET space_id = NULL WHERE space_id = ?`, [space.id]);
     db.run(`DELETE FROM brain_spaces WHERE id = ?`, [space.id]);
     saveDb(db, dbPath);
   } finally {

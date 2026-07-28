@@ -32,6 +32,22 @@ xb web
 
 On first run, `xb sync` uses your chosen browser session and downloads bookmarks into `~/.xtreme-bookmarks/`.
 
+## The research desk
+
+The web app is organized around using saved information, not merely storing it:
+
+- **Today** selects seven explainable signals from active work, review dates, fresh captures, stale claims, and forgotten material. Mark an item done, snooze it, dismiss it, or refresh the queue.
+- **Archive** searches the actual post text, quoted posts, authors, personal notes, categories, collections, and domains with BM25 ranking and visible match reasons.
+- **Activation** lets you record why you saved something, its intent, importance, status, and next review date.
+- **Brain Cycle** distills source text into a summary, key claim, why it matters, a suggested next action, entities, freshness, and conservative contradiction candidates. Today items and opened items can be distilled on demand, while incremental background passes catch up the archive.
+- **Workspaces** turn bookmarks into project evidence, decisions, tasks, inspiration, or references. Projects, open questions, dossiers, and durable topics can each carry a focus question.
+- **Ask** can search the entire archive or one workspace, keeps a bounded conversation, and shows canonical evidence behind the answer.
+- **Make** turns an answer and its evidence into a reusable brief, checklist, decision memo, experiment, context pack, or flashcards without another model call.
+- **Author dossiers** show a person's saved history, recurring territory, claims, timeline, notes, and explicit workspace contributions.
+- **Radar** watches selected X accounts and exposes Brain Cycle coverage, stale claims, and possible tensions alongside incoming signals.
+
+Personal annotations, original source text, and generated synthesis remain separate in context packs so an agent or collaborator can tell where every statement came from.
+
 ## Commands
 
 ### Sync
@@ -215,9 +231,9 @@ This project is maintained as a practical OSS tool for local-first research and 
 MIT
 
 
-## Ideas & Library Rail
+## Ideas and Library Rail
 
 - Capture quick ideas from the Brain or CLI.
-- Tags support + promoted status (★).
+- Tags support and promoted status.
 - Library view now includes a dedicated **Ideas rail** with promoted badges, tag pills, quick promote/delete, refresh.
 - Promoted ideas export to wiki + appear in graph.

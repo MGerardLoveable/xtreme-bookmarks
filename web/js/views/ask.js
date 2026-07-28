@@ -18,6 +18,16 @@ const SUGGESTIONS = [
 
 const LS_HISTORY = 'xb.v2.ask.history';
 
+function safeExternalUrl(value) {
+  if (!value) return '';
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+  } catch {
+    return '';
+  }
+}
+
 function loadHistory() {
   try { return JSON.parse(localStorage.getItem(LS_HISTORY) || '[]'); } catch { return []; }
 }
@@ -47,11 +57,11 @@ export function AskView(root) {
       <section class="ask-main">
         <header class="ask-header">
           <div class="brain-kicker">Ask</div>
-          <h1 class="display">Interrogate your archive.</h1>
-          <p class="brain-subtitle">Answers are grounded in your wiki pages and raw bookmarks. Sources are cited inline.</p>
+          <h1 class="display">Ask your research.</h1>
+          <p class="brain-subtitle">Trace an idea across saved sources, your notes, and active workspaces.</p>
         </header>
 
-        <div class="ask-transcript" id="ask-transcript">
+        <div class="ask-transcript" id="ask-transcript" aria-live="polite" aria-busy="false">
           <div class="empty-state">
             <span class="empty-icon" data-icon="message-circle"></span>
             <h3>No conversation yet</h3>
@@ -67,8 +77,6 @@ export function AskView(root) {
                 <span data-icon="target"></span>
                 <select id="ask-scope" aria-label="Answer scope">
                   <option value="all">All sources</option>
-                  <option value="topics">Topics</option>
-                  <option value="recent">Recent saves</option>
                 </select>
               </label>
               <label class="ask-save">
@@ -97,6 +105,30 @@ export function AskView(root) {
     scope: $('#ask-scope', root),
   };
   let askController = null;
+  let pendingTopicId = null;
+  let scopesPromise = null;
+
+  async function loadScopes() {
+    if (scopesPromise) return scopesPromise;
+    scopesPromise = (async () => {
+      try {
+        const data = await api.brainSpaces();
+        const spaces = (data.spaces || []).filter((space) => space.status !== 'archived');
+        const desiredValue = pendingTopicId ? `topic:${pendingTopicId}` : els.scope.value;
+        els.scope.innerHTML = `
+          <option value="all">All sources</option>
+          ${spaces.map((space) => `<option value="topic:${escape(space.id)}">${escape(space.name)} · ${escape(space.kind || 'project')}</option>`).join('')}
+        `;
+        if ([...els.scope.options].some((option) => option.value === desiredValue)) {
+          els.scope.value = desiredValue;
+          if (pendingTopicId && desiredValue === `topic:${pendingTopicId}`) pendingTopicId = null;
+        }
+      } catch {
+        els.scope.innerHTML = '<option value="all">All sources</option>';
+      }
+    })().finally(() => { scopesPromise = null; });
+    return scopesPromise;
+  }
 
   // Auto-grow textarea
   function autoGrow() {
@@ -138,6 +170,7 @@ export function AskView(root) {
 
   function renderConversation(convo) {
     conversation = convo;
+    els.transcript.setAttribute('aria-busy', String(convo.some((turn) => turn.pending)));
     if (!convo.length) {
       els.transcript.innerHTML = `
         <div class="empty-state">
@@ -159,6 +192,44 @@ export function AskView(root) {
     $$('.ask-source', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
       openWiki(btn.dataset.page);
     }));
+    $$('[data-ask-evidence]', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
+      const item = convo.flatMap((turn) => turn.evidence || []).find((entry) => entry.itemId === btn.dataset.askEvidence);
+      if (!item) return;
+      document.dispatchEvent(new CustomEvent('xb:navigate', {
+        detail: { view: 'library', filter: { q: String(item.excerpt || item.title || '').slice(0, 120) } },
+      }));
+    }));
+    $$('.ask-make-action', els.transcript).forEach((btn) => btn.addEventListener('click', async () => {
+      const turn = convo[Number(btn.dataset.i)];
+      if (!turn) return;
+      btn.disabled = true;
+      const topicId = turn.scope?.startsWith('topic:') ? turn.scope.slice('topic:'.length) : null;
+      try {
+        const result = await api.makeArtifact({
+          type: btn.dataset.type,
+          query: turn.question,
+          title: `${turn.question.slice(0, 72)} · ${btn.textContent.trim()}`,
+          topicId,
+          synthesis: turn.answer,
+          limit: 16,
+        });
+        turn.madeArtifact = {
+          id: result.savedArtifact?.id,
+          title: result.title,
+          markdown: result.markdown,
+          type: result.type,
+        };
+        renderConversation(convo);
+        toast(`${result.type.replace('_', ' ')} saved`);
+      } catch (err) {
+        btn.disabled = false;
+        toast(`Make failed: ${err.message}`);
+      }
+    }));
+    $$('.ask-made-copy', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
+      const turn = convo[Number(btn.dataset.i)];
+      copy(turn?.madeArtifact?.markdown || '').then(() => toast('Artifact copied'));
+    }));
     els.transcript.scrollTop = els.transcript.scrollHeight;
   }
 
@@ -178,11 +249,53 @@ export function AskView(root) {
       </div>
     ` : '';
 
+    const evidence = (turn.evidence && turn.evidence.length) ? `
+      <div class="ask-evidence">
+        <div class="detail-section-title">Evidence</div>
+        <div class="ask-evidence-list">
+          ${turn.evidence.slice(0, 10).map((item, evidenceIndex) => {
+            const safeUrl = safeExternalUrl(item.url);
+            return `
+            ${safeUrl ? `<a href="${escape(safeUrl)}" target="_blank" rel="noopener">` : `<button data-ask-evidence="${escape(item.itemId)}">`}
+              <span>${escape(item.provenance?.sourceLabel || item.title || item.kind)}</span>
+              <small>${escape(String(item.excerpt || '').slice(0, 170))}</small>
+              <em>[${evidenceIndex + 1}] ${escape(item.kind)}</em>
+            ${safeUrl ? '</a>' : '</button>'}
+          `;
+          }).join('')}
+        </div>
+      </div>
+    ` : '';
+
     const updates = (turn.wikiUpdates && turn.wikiUpdates.length) ? `
       <div class="detail-section-title" style="margin-top:12px">Suggested wiki updates</div>
       <ul style="font-size:12px;color:var(--fg-2);padding-left:18px;display:grid;gap:4px">
         ${turn.wikiUpdates.map((u) => `<li>${escape(u)}</li>`).join('')}
       </ul>
+    ` : '';
+
+    const makeBar = turn.answer ? `
+      <div class="ask-make">
+        <span>Make</span>
+        ${[
+          ['brief', 'Brief'],
+          ['checklist', 'Checklist'],
+          ['decision', 'Decision'],
+          ['experiment', 'Experiment'],
+          ['context_pack', 'Context pack'],
+          ['flashcards', 'Flashcards'],
+        ].map(([type, label]) => `<button class="btn btn-sm btn-ghost ask-make-action" data-i="${idx}" data-type="${type}">${label}</button>`).join('')}
+      </div>
+    ` : '';
+
+    const made = turn.madeArtifact ? `
+      <div class="ask-made">
+        <div class="ask-made-heading">
+          <span><span data-icon="check-circle"></span>${escape(turn.madeArtifact.title)}</span>
+          <button class="btn btn-sm btn-ghost ask-made-copy" data-i="${idx}"><span data-icon="copy"></span>Copy</button>
+        </div>
+        <pre>${escape(turn.madeArtifact.markdown)}</pre>
+      </div>
     ` : '';
 
     const footer = turn.answer ? `
@@ -206,7 +319,10 @@ export function AskView(root) {
             ${statusLine}
             ${answerBlock}
             ${sources}
+            ${evidence}
             ${updates}
+            ${makeBar}
+            ${made}
             ${footer}
           </div>
         </div>
@@ -218,10 +334,18 @@ export function AskView(root) {
   async function streamAsk(question, save, scope, turn) {
     askController?.abort();
     askController = new AbortController();
+    const topicId = scope?.startsWith('topic:') ? scope.slice('topic:'.length) : null;
+    const priorTurns = conversation
+      .filter((entry) => entry !== turn && entry.answer)
+      .slice(-6)
+      .flatMap((entry) => [
+        { role: 'user', content: entry.question },
+        { role: 'assistant', content: entry.answer },
+      ]);
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, save, scope }),
+      body: JSON.stringify({ question, save, scope, topicId, conversation: priorTurns }),
       signal: askController.signal,
     });
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -255,6 +379,8 @@ export function AskView(root) {
           turn.wikiUpdates = parsed.wikiUpdates || [];
           turn.savedAs = parsed.savedAs;
           turn.engine = parsed.engine;
+          turn.evidence = parsed.evidence || [];
+          turn.savedArtifact = parsed.savedArtifact || null;
           renderConversation(conversation);
         } else if (event === 'error') {
           turn.pending = false;
@@ -305,9 +431,26 @@ export function AskView(root) {
     els.input.focus();
   });
 
+  function prefill(payload = {}) {
+    if (payload.question) {
+      els.input.value = payload.question;
+      autoGrow();
+    }
+    if (payload.topicId) {
+      const option = [...els.scope.options].find((entry) => entry.value === `topic:${payload.topicId}`);
+      if (option) els.scope.value = option.value;
+      else pendingTopicId = payload.topicId;
+    }
+    setTimeout(() => {
+      els.input.focus();
+      els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+    }, 40);
+  }
+
   return {
-    onShow() { setTimeout(() => els.input.focus(), 40); },
+    onShow() { void loadScopes(); setTimeout(() => els.input.focus(), 40); },
     onHide() { askController?.abort(); },
     onKey() {},
+    prefill,
   };
 }

@@ -8,17 +8,24 @@ import {
   addBrainBookmark,
   addBrainRepo,
   brainMemoryOverview,
+  consolidateExactDuplicateBrainSpacesFromDb,
   createBrainNote,
   createBrainSpace,
+  deleteBrainSpace,
+  findExactDuplicateBrainSpaceGroupsFromDb,
+  listBrainSpacesFromDb,
   listBrainBookmarks,
   listBrainWorkflows,
   listBrainRepos,
+  openBrainDb,
   parseGitHubRepo,
   replaceManagedSection,
   runBrainWorkflow,
   seedBrainSpace,
   syncBrainMemory,
 } from '../src/brain.js';
+import { ensureActivationSchema } from '../src/activation.js';
+import { saveDb } from '../src/db.js';
 
 const FIXTURES = [
   {
@@ -128,6 +135,144 @@ test('manual Sub-Brain bookmark membership is preserved', async () => {
     assert.equal(bookmarks.length, 1);
     assert.equal(bookmarks[0].id, '2');
     assert.equal(bookmarks[0].source, 'manual');
+  });
+});
+
+test('workspace creation is idempotent and exact duplicates consolidate safely', async () => {
+  await withDataDir(async () => {
+    const space = await createBrainSpace({ name: 'Useful Tools', kind: 'project' });
+    const repeated = await createBrainSpace({ name: ' useful tools ', kind: 'project' });
+    assert.equal(repeated.id, space.id);
+
+    fs.mkdirSync(path.dirname(space.pagePath), { recursive: true });
+    fs.writeFileSync(
+      space.pagePath,
+      '# Useful Tools\n\nManual notes can go here.\n\n<!-- xb:managed:start brain-summary -->\nGenerated A\n<!-- xb:managed:end brain-summary -->\n',
+    );
+
+    const { db } = await openBrainDb();
+    try {
+      const duplicateId = `${space.id}-2`;
+      const duplicatePagePath = path.join(path.dirname(space.pagePath), `${duplicateId}.md`);
+      fs.writeFileSync(
+        duplicatePagePath,
+        '# Useful Tools\n\nManual notes can go here.\n\n<!-- xb:managed:start brain-summary -->\nGenerated B\n<!-- xb:managed:end brain-summary -->\n',
+      );
+      db.run(
+        `INSERT INTO brain_spaces (
+          id, name, description, keywords_json, category, domain, collection,
+          created_at, updated_at, page_path, kind, status, focus_question
+        ) VALUES (?, 'Useful Tools', '', '[]', NULL, NULL, NULL, ?, ?, ?,
+          'project', 'active', '')`,
+        [
+          duplicateId,
+          '2026-07-20T00:00:01Z',
+          '2026-07-20T00:00:01Z',
+          duplicatePagePath,
+        ],
+      );
+      db.run(
+        `INSERT INTO brain_space_bookmarks
+         (space_id, bookmark_id, source, score, added_at)
+         VALUES (?, '1', 'seed', 0.5, '2026-07-20T00:00:01Z')`,
+        [duplicateId],
+      );
+      db.run(
+        `INSERT INTO brain_agent_findings
+         (run_id, space_id, agent_type, finding_type, title, url, detail, severity, created_at)
+         VALUES
+           (1, ?, 'github', 'release', 'Shared release', 'https://example.com/release', 'Canonical', 'info', '2026-07-20T00:00:01Z'),
+           (2, ?, 'github', 'release', 'Shared release', 'https://example.com/release', 'Duplicate', 'info', '2026-07-20T00:00:02Z')`,
+        [space.id, duplicateId],
+      );
+      db.run(
+        `INSERT INTO brain_artifacts (
+           id, source_type, source_id, space_id, title, body, captured_at, updated_at
+         ) VALUES
+           ('canonical-artifact', 'bookmark', '1', ?, 'Canonical source', 'Canonical body',
+            '2026-07-20T00:00:01Z', '2026-07-20T00:00:01Z'),
+           ('duplicate-artifact', 'bookmark', '1', ?, 'Duplicate source', 'Duplicate body',
+            '2026-07-20T00:00:02Z', '2026-07-20T00:00:02Z')`,
+        [space.id, duplicateId],
+      );
+      db.run(
+        `INSERT INTO brain_claims (id, artifact_id, claim, created_at)
+         VALUES ('duplicate-claim', 'duplicate-artifact', 'Preserve this claim', '2026-07-20T00:00:02Z')`,
+      );
+
+      const groups = await findExactDuplicateBrainSpaceGroupsFromDb(db);
+      assert.deepEqual(groups, [{ canonicalId: space.id, duplicateIds: [duplicateId] }]);
+      assert.equal(consolidateExactDuplicateBrainSpacesFromDb(db, groups), 1);
+      assert.equal(listBrainSpacesFromDb(db).length, 1);
+      const membership = db.exec(
+        'SELECT source FROM brain_space_bookmarks WHERE space_id = ? AND bookmark_id = ?',
+        [space.id, '1'],
+      );
+      assert.equal(membership[0]?.values.length, 1);
+      const findings = db.exec(
+        'SELECT title FROM brain_agent_findings WHERE space_id = ?',
+        [space.id],
+      );
+      assert.equal(findings[0]?.values.length, 2);
+      const artifacts = db.exec(
+        `SELECT id, space_id FROM brain_artifacts
+         WHERE id IN ('canonical-artifact', 'duplicate-artifact')
+         ORDER BY id`,
+      );
+      assert.deepEqual(artifacts[0]?.values, [
+        ['canonical-artifact', space.id],
+        ['duplicate-artifact', null],
+      ]);
+      const preservedClaim = db.exec(
+        `SELECT artifact_id FROM brain_claims WHERE id = 'duplicate-claim'`,
+      );
+      assert.equal(preservedClaim[0]?.values[0]?.[0], 'duplicate-artifact');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test('deleting a workspace clears roles and preserves its artifacts as unscoped knowledge', async () => {
+  await withDataDir(async () => {
+    const space = await createBrainSpace({ name: 'Temporary Project', kind: 'project' });
+    const { db, dbPath } = await openBrainDb();
+    try {
+      ensureActivationSchema(db);
+      db.run(
+        `INSERT INTO project_item_roles (space_id, bookmark_id, role, created_at, updated_at)
+         VALUES (?, '1', 'evidence', '2026-07-20T00:00:00Z', '2026-07-20T00:00:00Z')`,
+        [space.id],
+      );
+      db.run(
+        `INSERT INTO brain_artifacts (
+           id, source_type, source_id, space_id, title, body, captured_at, updated_at
+         ) VALUES (
+           'temporary-artifact', 'note', 'temporary-note', ?, 'Keep me', 'Durable knowledge',
+           '2026-07-20T00:00:00Z', '2026-07-20T00:00:00Z'
+         )`,
+        [space.id],
+      );
+      saveDb(db, dbPath);
+    } finally {
+      db.close();
+    }
+
+    await deleteBrainSpace(space.id);
+    const reopened = await openBrainDb();
+    try {
+      const roles = reopened.db.exec(
+        `SELECT COUNT(*) FROM project_item_roles WHERE space_id = ?`,
+        [space.id],
+      );
+      assert.equal(roles[0]?.values[0]?.[0], 0);
+      const artifact = reopened.db.exec(
+        `SELECT space_id FROM brain_artifacts WHERE id = 'temporary-artifact'`,
+      );
+      assert.equal(artifact[0]?.values[0]?.[0], null);
+    } finally {
+      reopened.db.close();
+    }
   });
 });
 

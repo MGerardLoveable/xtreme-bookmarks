@@ -26,12 +26,43 @@ import { consolidateMemoryTiers, getMemoryTierStats } from './memory-tier.js';
 import { getGraphStats, exportGraphAsMermaid, loadGraph } from './graph.js';
 import { runMaintenanceAgent, exportHealthReportAsJson } from './agents.js';
 import { askMd } from './md-ask.js';
+import type { KnowledgeConversationTurn } from './types.js';
 import {
+  KnowledgeTopicNotFoundError,
   listKnowledgeAnnotationsFromDb,
   listKnowledgeItemsFromDb,
   listKnowledgeTopicsFromDb,
+  requireActiveKnowledgeTopicFromDb,
   retrieveKnowledgeEvidenceFromDb,
 } from './knowledge-service.js';
+import {
+  activationSchemaPending,
+  addBookmarkToProjectFromDb,
+  attachActivationMetadataFromDb,
+  brainCycleBacklogPendingFromDb,
+  brainCycleDueFromDb,
+  brainCyclePendingCountFromDb,
+  deleteBookmarkActivationFromDb,
+  ensureActivationSchema,
+  generateTodayQueueFromDb,
+  getAuthorDossierFromDb,
+  getBookmarkActivationDetailsFromDb,
+  getBrainCycleStatusFromDb,
+  listTodayQueueFromDb,
+  recordActivationEventFromDb,
+  removeBookmarkFromProjectFromDb,
+  runBrainCycleFromDb,
+  todayKey,
+  updateTodayQueueItemFromDb,
+  upsertActivationProfileFromDb,
+  type ActivationProfileInput,
+  type ProjectItemRole,
+} from './activation.js';
+import {
+  buildContextPackFromDb,
+  makeKnowledgeArtifactFromDb,
+  type MakeArtifactType,
+} from './context-packs.js';
 import { detectAvailableEngines, getGrokOauthStatus } from './engine.js';
 import { loadPreferences } from './preferences.js';
 import { loadEnv } from './config.js';
@@ -84,6 +115,8 @@ import {
   seedBrainSpace,
   syncBrainMemory,
   updateBrainSpace,
+  type BrainSpaceKind,
+  type BrainSpaceStatus,
   type BrainWorkflowId,
 } from './brain.js';
 import {
@@ -116,6 +149,8 @@ type WebRuntimeState = {
   db: Database;
   dbReloading?: boolean;
   grabRunning?: boolean;
+  activationCycleRunning?: boolean;
+  activationCycleTimer?: ReturnType<typeof setTimeout>;
   grabStartedAt?: string;
   lastGrabSucceededAt?: string;
   lastGrabError?: string;
@@ -123,6 +158,9 @@ type WebRuntimeState = {
 };
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+const ACTIVATION_BATCH_BUDGET = 5000;
+const ACTIVATION_CADENCE_HOURS = 20;
+const ACTIVATION_BACKLOG_DELAY_MS = 15_000;
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -241,6 +279,22 @@ function sendXApiError(res: http.ServerResponse, err: unknown): boolean {
     setupUrl: '/setup-x.html',
   }, err.status);
   return true;
+}
+
+function resolveKnowledgeTopicForRequest(
+  db: Database,
+  res: http.ServerResponse,
+  topicId?: string | null,
+): { valid: true; topicId: string | null } | { valid: false } {
+  try {
+    return { valid: true, topicId: requireActiveKnowledgeTopicFromDb(db, topicId) };
+  } catch (error) {
+    if (error instanceof KnowledgeTopicNotFoundError) {
+      sendError(res, error.message, 404);
+      return { valid: false };
+    }
+    throw error;
+  }
 }
 
 function parseBody(req: http.IncomingMessage): Promise<string> {
@@ -807,6 +861,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
       b.isRead = readMap.get(b.id) ?? false;
     }
   }
+  attachActivationMetadataFromDb(db, bookmarks);
 
   return {
     bookmarks,
@@ -879,8 +934,29 @@ function handleBookmarkById(db: Database, id: string): unknown {
 
   const readRows = db.exec(`SELECT is_read FROM bookmark_read_status WHERE bookmark_id = ?`, [id]);
   (bookmark as Record<string, unknown>).isRead = Number(readRows[0]?.values?.[0]?.[0] ?? 0) === 1;
+  (bookmark as Record<string, unknown>).activation = getBookmarkActivationDetailsFromDb(db, id);
 
   return bookmark;
+}
+
+function hydrateTodayQueue(
+  db: Database,
+  queue: ReturnType<typeof listTodayQueueFromDb>,
+): Array<Record<string, unknown>> {
+  if (!queue.length) return [];
+  const ids = queue.map((item) => item.bookmarkId);
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.exec(
+    `SELECT ${BOOKMARK_COLS} FROM bookmarks b WHERE b.id IN (${placeholders})`,
+    ids,
+  );
+  const bookmarks = (rows[0]?.values ?? []).map(mapRow);
+  attachActivationMetadataFromDb(db, bookmarks);
+  const bookmarkMap = new Map(bookmarks.map((bookmark) => [String(bookmark.id), bookmark]));
+  return queue.flatMap((item) => {
+    const bookmark = bookmarkMap.get(item.bookmarkId);
+    return bookmark ? [{ ...item, bookmark }] : [];
+  });
 }
 
 function handleStats(db: Database): unknown {
@@ -1033,6 +1109,140 @@ async function handleApi(
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/today') {
+      const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit')) || 7, 20));
+      const force = url.searchParams.get('refresh') === 'true';
+      const current = listTodayQueueFromDb(db);
+      const shouldGenerate = force || current.length < limit;
+      const queue = shouldGenerate
+        ? generateTodayQueueFromDb(db, { limit, force })
+        : current.slice(0, limit);
+      const queueIds = queue.map((item) => item.bookmarkId);
+      const pendingToday = queueIds.length
+        ? (db.exec(
+          `SELECT b.id
+           FROM bookmarks b
+           LEFT JOIN bookmark_enrichment e ON e.bookmark_id = b.id
+           WHERE b.id IN (${queueIds.map(() => '?').join(',')})
+             AND (
+               e.bookmark_id IS NULL
+               OR (b.source_hash IS NOT NULL AND e.source_hash != b.source_hash)
+             )`,
+          queueIds,
+        )[0]?.values ?? []).map((row) => String(row[0]))
+        : [];
+      if (pendingToday.length) {
+        runBrainCycleFromDb(db, {
+          budget: pendingToday.length,
+          bookmarkIds: pendingToday,
+        });
+      }
+      if (shouldGenerate || pendingToday.length) saveDb(db, dbPath);
+      sendJson(res, {
+        date: todayKey(),
+        items: hydrateTodayQueue(db, queue),
+        generated: shouldGenerate,
+      });
+      return;
+    }
+
+    const todayActionMatch = pathname.match(/^\/api\/today\/(\d+)\/action$/);
+    if (req.method === 'POST' && todayActionMatch) {
+      const bodyText = await parseBody(req);
+      const body = bodyText.trim()
+        ? JSON.parse(bodyText) as { action?: string; snoozedUntil?: string | null }
+        : {};
+      if (!['done', 'dismiss', 'snooze'].includes(body.action || '')) {
+        sendError(res, 'Action must be done, dismiss, or snooze.', 400);
+        return;
+      }
+      const item = updateTodayQueueItemFromDb(
+        db,
+        Number(todayActionMatch[1]),
+        body.action as 'done' | 'dismiss' | 'snooze',
+        body.snoozedUntil,
+      );
+      if (!item) { sendError(res, 'Today item not found.', 404); return; }
+      saveDb(db, dbPath);
+      sendJson(res, { item });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/dossiers') {
+      const author = (url.searchParams.get('author') || '').trim();
+      if (!author) { sendError(res, 'author is required.', 400); return; }
+      const dossier = getAuthorDossierFromDb(db, author);
+      if (!dossier) { sendError(res, 'Author not found.', 404); return; }
+      sendJson(res, { dossier });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/context-packs') {
+      const body = JSON.parse(await parseBody(req)) as {
+        query?: string;
+        title?: string;
+        topicId?: string | null;
+        limit?: number;
+        synthesis?: string;
+      };
+      const topic = resolveKnowledgeTopicForRequest(db, res, body.topicId);
+      if (!topic.valid) return;
+      const pack = buildContextPackFromDb(db, {
+        query: body.query || '',
+        title: body.title,
+        topicId: topic.topicId,
+        limit: body.limit,
+        synthesis: body.synthesis,
+      });
+      sendJson(res, { pack });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/make') {
+      const body = JSON.parse(await parseBody(req)) as {
+        type?: MakeArtifactType;
+        query?: string;
+        title?: string;
+        topicId?: string | null;
+        limit?: number;
+        synthesis?: string;
+      };
+      const allowedTypes: MakeArtifactType[] = [
+        'brief',
+        'checklist',
+        'decision',
+        'experiment',
+        'context_pack',
+        'flashcards',
+      ];
+      if (!body.type || !allowedTypes.includes(body.type)) {
+        sendError(res, 'A valid artifact type is required.', 400);
+        return;
+      }
+      const topic = resolveKnowledgeTopicForRequest(db, res, body.topicId);
+      if (!topic.valid) return;
+      const result = makeKnowledgeArtifactFromDb(db, {
+        type: body.type,
+        query: body.query || '',
+        title: body.title,
+        topicId: topic.topicId,
+        limit: body.limit,
+        synthesis: body.synthesis,
+      });
+      for (const evidence of result.evidence) {
+        const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [evidence.itemId]);
+        if (exists[0]?.values.length) {
+          recordActivationEventFromDb(db, evidence.itemId, 'made', {
+            artifactType: body.type,
+            artifactId: result.savedArtifact.id,
+          });
+        }
+      }
+      saveDb(db, dbPath);
+      sendJson(res, result);
+      return;
+    }
+
     // ── Ideas / Quick Notepad API ─────────────────────────────────────────────
     if (req.method === 'GET' && pathname === '/api/ideas') {
       sendJson(res, loadIdeas());
@@ -1076,6 +1286,86 @@ async function handleApi(
       return;
     }
 
+    const activationMatch = pathname.match(/^\/api\/bookmarks\/([^/]+)\/activation$/);
+    if (activationMatch && req.method === 'GET') {
+      const id = decodeURIComponent(activationMatch[1]);
+      const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [id]);
+      if (!exists[0]?.values.length) { sendError(res, 'Bookmark not found.', 404); return; }
+      sendJson(res, { activation: getBookmarkActivationDetailsFromDb(db, id) });
+      return;
+    }
+    if (activationMatch && req.method === 'PUT') {
+      const id = decodeURIComponent(activationMatch[1]);
+      const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [id]);
+      if (!exists[0]?.values.length) { sendError(res, 'Bookmark not found.', 404); return; }
+      const body = JSON.parse(await parseBody(req)) as ActivationProfileInput;
+      const profile = upsertActivationProfileFromDb(db, id, body);
+      recordActivationEventFromDb(db, id, 'profile_updated', {
+        intent: profile.intent,
+        importance: profile.importance,
+      });
+      saveDb(db, dbPath);
+      sendJson(res, {
+        profile,
+        activation: getBookmarkActivationDetailsFromDb(db, id),
+      });
+      return;
+    }
+
+    const eventMatch = pathname.match(/^\/api\/bookmarks\/([^/]+)\/events$/);
+    if (eventMatch && req.method === 'POST') {
+      const id = decodeURIComponent(eventMatch[1]);
+      const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [id]);
+      if (!exists[0]?.values.length) { sendError(res, 'Bookmark not found.', 404); return; }
+      const body = JSON.parse(await parseBody(req)) as {
+        type?: string;
+        metadata?: Record<string, unknown>;
+      };
+      if (!body.type?.trim()) { sendError(res, 'Event type is required.', 400); return; }
+      const eventId = recordActivationEventFromDb(db, id, body.type, body.metadata);
+      saveDb(db, dbPath);
+      sendJson(res, { success: true, eventId });
+      return;
+    }
+
+    const bookmarkProjectMatch = pathname.match(/^\/api\/bookmarks\/([^/]+)\/projects\/([^/]+)$/);
+    if (bookmarkProjectMatch && req.method === 'POST') {
+      const bookmarkId = decodeURIComponent(bookmarkProjectMatch[1]);
+      const spaceId = decodeURIComponent(bookmarkProjectMatch[2]);
+      const bookmarkExists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [bookmarkId]);
+      if (!bookmarkExists[0]?.values.length) { sendError(res, 'Bookmark not found.', 404); return; }
+      const spaceExists = db.exec('SELECT 1 FROM brain_spaces WHERE id = ? LIMIT 1', [spaceId]);
+      if (!spaceExists[0]?.values.length) { sendError(res, 'Project not found.', 404); return; }
+      const bodyText = await parseBody(req);
+      const body = bodyText.trim()
+        ? JSON.parse(bodyText) as { role?: ProjectItemRole }
+        : {};
+      const allowedRoles: ProjectItemRole[] = ['evidence', 'inspiration', 'task', 'decision', 'reference'];
+      const role = body.role && allowedRoles.includes(body.role) ? body.role : 'evidence';
+      addBookmarkToProjectFromDb(db, bookmarkId, spaceId, role);
+      saveDb(db, dbPath);
+      sendJson(res, {
+        success: true,
+        activation: getBookmarkActivationDetailsFromDb(db, bookmarkId),
+      });
+      return;
+    }
+    if (bookmarkProjectMatch && req.method === 'DELETE') {
+      const bookmarkId = decodeURIComponent(bookmarkProjectMatch[1]);
+      const spaceId = decodeURIComponent(bookmarkProjectMatch[2]);
+      const bookmarkExists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [bookmarkId]);
+      if (!bookmarkExists[0]?.values.length) { sendError(res, 'Bookmark not found.', 404); return; }
+      const spaceExists = db.exec('SELECT 1 FROM brain_spaces WHERE id = ? LIMIT 1', [spaceId]);
+      if (!spaceExists[0]?.values.length) { sendError(res, 'Project not found.', 404); return; }
+      removeBookmarkFromProjectFromDb(db, bookmarkId, spaceId);
+      saveDb(db, dbPath);
+      sendJson(res, {
+        success: true,
+        activation: getBookmarkActivationDetailsFromDb(db, bookmarkId),
+      });
+      return;
+    }
+
     const noteMatch = pathname.match(/^\/api\/bookmarks\/([^/]+)\/note$/);
     if (req.method === 'POST' && noteMatch) {
       const body = await parseBody(req);
@@ -1087,6 +1377,7 @@ async function handleApi(
         [id, note ?? '', now],
       );
       refreshBookmarkSearchRow(db, id);
+      recordActivationEventFromDb(db, id, 'note_updated', { length: (note ?? '').length });
       saveDb(db, dbPath);
       sendJson(res, { success: true, updatedAt: now });
       return;
@@ -1160,6 +1451,8 @@ async function handleApi(
         db.run(`DELETE FROM bookmark_read_status WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM bookmark_highlights WHERE bookmark_id = ?`, [id]);
         db.run(`DELETE FROM dead_links WHERE bookmark_id = ?`, [id]);
+        db.run(`DELETE FROM brain_space_bookmarks WHERE bookmark_id = ?`, [id]);
+        deleteBookmarkActivationFromDb(db, id);
         db.run(`DELETE FROM bookmarks WHERE id = ?`, [id]);
         db.run('COMMIT');
       } catch (err) {
@@ -1310,6 +1603,7 @@ async function handleApi(
       } else {
         db.run(`INSERT OR REPLACE INTO bookmark_read_status (bookmark_id, is_read, read_at) VALUES (?, 0, NULL)`, [id]);
       }
+      recordActivationEventFromDb(db, id, nextRead ? 'read' : 'marked_unread');
       saveDb(db, dbPath);
       sendJson(res, { success: true, isRead: nextRead });
       return;
@@ -1386,6 +1680,7 @@ async function handleApi(
       const now = new Date().toISOString();
       db.run(`INSERT INTO bookmark_highlights (bookmark_id, text_fragment, color, created_at) VALUES (?, ?, ?, ?)`, [bookmarkId, textFragment, color, now]);
       refreshBookmarkSearchRow(db, bookmarkId);
+      recordActivationEventFromDb(db, bookmarkId, 'highlighted', { color, length: textFragment.length });
       saveDb(db, dbPath);
       sendJson(res, { success: true });
       return;
@@ -1723,6 +2018,34 @@ async function handleApi(
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/brain/cycle') {
+      sendJson(res, getBrainCycleStatusFromDb(db));
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/api/brain/cycle') {
+      const bodyText = await parseBody(req);
+      const body = bodyText.trim()
+        ? JSON.parse(bodyText) as {
+          budget?: number;
+          bookmarkIds?: string[];
+          force?: boolean;
+        }
+        : {};
+      const result = runBrainCycleFromDb(db, {
+        budget: body.budget,
+        bookmarkIds: body.bookmarkIds,
+        force: body.force,
+      });
+      generateTodayQueueFromDb(db, { limit: 7 });
+      saveDb(db, dbPath);
+      sendJson(res, {
+        result,
+        status: getBrainCycleStatusFromDb(db),
+      });
+      return;
+    }
+
     if (req.method === 'GET' && pathname === '/api/brain/engine') {
       const engines = detectAvailableEngines();
       const prefs = loadPreferences();
@@ -2043,6 +2366,9 @@ async function handleApi(
         domain?: string | null;
         collection?: string | null;
         repos?: string[];
+        kind?: BrainSpaceKind;
+        status?: BrainSpaceStatus;
+        focusQuestion?: string;
       };
       const keywords = Array.isArray(body.keywords)
         ? body.keywords
@@ -2056,6 +2382,9 @@ async function handleApi(
         category: body.category,
         domain: body.domain,
         collection: body.collection,
+        kind: body.kind,
+        status: body.status,
+        focusQuestion: body.focusQuestion,
       });
       for (const repo of body.repos ?? []) {
         await addBrainRepo(space.id, { repo, source: 'create' });
@@ -2080,6 +2409,13 @@ async function handleApi(
         category: typeof body.category === 'string' || body.category === null ? body.category : undefined,
         domain: typeof body.domain === 'string' || body.domain === null ? body.domain : undefined,
         collection: typeof body.collection === 'string' || body.collection === null ? body.collection : undefined,
+        kind: body.kind === 'project' || body.kind === 'question' || body.kind === 'dossier' || body.kind === 'topic'
+          ? body.kind
+          : undefined,
+        status: body.status === 'active' || body.status === 'incubating' || body.status === 'complete' || body.status === 'archived'
+          ? body.status
+          : undefined,
+        focusQuestion: typeof body.focusQuestion === 'string' ? body.focusQuestion : undefined,
       });
       sendJson(res, { space });
       return;
@@ -2303,16 +2639,60 @@ async function handleApi(
       const send = (event: string, data: unknown) =>
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       try {
-        const body = JSON.parse(await parseBody(req)) as { question?: string; save?: boolean };
+        const body = JSON.parse(await parseBody(req)) as {
+          question?: string;
+          save?: boolean;
+          scope?: string;
+          topicId?: string | null;
+          conversation?: KnowledgeConversationTurn[];
+        };
         const question = (body.question || '').trim();
         if (!question) { send('error', { message: 'Question is required' }); res.end(); return; }
+        const scopedTopicId = body.topicId
+          || (body.scope?.startsWith('topic:') ? body.scope.slice('topic:'.length) : null);
+        if (scopedTopicId) {
+          const topicExists = db.exec(
+            `SELECT 1 FROM brain_spaces
+             WHERE id = ? AND COALESCE(status, 'active') != 'archived'
+             LIMIT 1`,
+            [scopedTopicId],
+          );
+          if (!topicExists[0]?.values.length) {
+            send('error', { message: 'Workspace not found.' });
+            res.end();
+            return;
+          }
+        }
+        const conversation = Array.isArray(body.conversation)
+          ? body.conversation
+            .filter((turn): turn is KnowledgeConversationTurn =>
+              Boolean(turn)
+              && (turn.role === 'user' || turn.role === 'assistant')
+              && typeof turn.content === 'string'
+              && turn.content.trim().length > 0
+            )
+            .slice(-12)
+            .map((turn) => ({ role: turn.role, content: turn.content.slice(0, 8_000) }))
+          : [];
 
         send('status', { message: 'Thinking…' });
         const result = await askMd(question, {
           save: Boolean(body.save),
           nonInteractive: true,
+          topicId: scopedTopicId,
+          conversation,
           onProgress: (msg) => send('status', { message: msg }),
         });
+        for (const evidence of result.evidence.slice(0, 8)) {
+          const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [evidence.itemId]);
+          if (exists[0]?.values.length) {
+            recordActivationEventFromDb(db, evidence.itemId, 'asked', {
+              question: question.slice(0, 240),
+              topicId: scopedTopicId,
+            });
+          }
+        }
+        if (result.evidence.length || body.save) saveDb(db, dbPath);
         send('done', result);
       } catch (err) {
         send('error', { message: (err as Error).message });
@@ -2369,6 +2749,54 @@ async function autoUpdateXWatchlist(state: { db: Database }, dbPath: string): Pr
   await startXBrowserPoller(xBrowserPollOptions(dbPath, state));
 }
 
+async function autoActivationCycle(
+  state: WebRuntimeState,
+  dbPath: string,
+  budget = ACTIVATION_BATCH_BUDGET,
+  cadenceHours = ACTIVATION_CADENCE_HOURS,
+): Promise<void> {
+  if (state.dbReloading || state.grabRunning || state.activationCycleRunning) return;
+  const pendingBefore = brainCyclePendingCountFromDb(state.db);
+  if (pendingBefore === 0) return;
+  const drainingBacklog = brainCycleBacklogPendingFromDb(state.db);
+  if (!drainingBacklog && !brainCycleDueFromDb(state.db, cadenceHours)) return;
+  state.activationCycleRunning = true;
+  let pendingAfter = pendingBefore;
+  let succeeded = false;
+  try {
+    const result = runBrainCycleFromDb(state.db, { budget });
+    pendingAfter = result.pendingAfter;
+    generateTodayQueueFromDb(state.db, { limit: 7 });
+    saveDb(state.db, dbPath);
+    succeeded = true;
+    console.log(`  Brain Cycle: ${result.summary}`);
+  } catch (err) {
+    console.error('  Brain Cycle failed:', (err as Error).message);
+  } finally {
+    state.activationCycleRunning = false;
+  }
+  if (succeeded && pendingAfter > 0) {
+    scheduleActivationCycle(state, dbPath, ACTIVATION_BACKLOG_DELAY_MS, budget, cadenceHours);
+  }
+}
+
+function scheduleActivationCycle(
+  state: WebRuntimeState,
+  dbPath: string,
+  delayMs: number,
+  budget = ACTIVATION_BATCH_BUDGET,
+  cadenceHours = ACTIVATION_CADENCE_HOURS,
+): void {
+  if (state.activationCycleTimer) return;
+  state.activationCycleTimer = setTimeout(() => {
+    state.activationCycleTimer = undefined;
+    autoActivationCycle(state, dbPath, budget, cadenceHours).catch((err) => {
+      console.error('  Brain Cycle schedule failed:', (err as Error).message);
+    });
+  }, delayMs);
+  state.activationCycleTimer.unref();
+}
+
 export async function startWebServer(port: number = 3848): Promise<void> {
   loadEnv();
   const auth = getWebAuthConfig();
@@ -2380,8 +2808,10 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   const dbPath = twitterBookmarksIndexPath();
   if (!fs.existsSync(dbPath)) { console.error('  Database not found. Run: xb sync && xb index'); process.exitCode = 1; return; }
   const state: WebRuntimeState = { db: await openDb(dbPath) };
+  if (activationSchemaPending(state.db)) backupDb(dbPath, 'before-activation-v1');
   ensureMigrations(state.db);
   initBrainSchema(state.db);
+  ensureActivationSchema(state.db);
   initXStreamSchema(state.db);
 
   // Tables
@@ -2398,6 +2828,7 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   autoUpdateXWatchlist(state, dbPath).catch((err) => {
     console.error('  X Feed auto-update failed:', (err as Error).message);
   });
+  scheduleActivationCycle(state, dbPath, 10_000);
 
   const webDir = resolveWebDir();
   const resolvedWebDir = path.resolve(webDir);
@@ -2427,7 +2858,7 @@ export async function startWebServer(port: number = 3848): Promise<void> {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PUT, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PUT, PATCH, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
@@ -2512,6 +2943,11 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   const brainInterval = setInterval(() => {
     runDueBrainAgents().catch((err) => console.error('  Brain agent watch failed:', (err as Error).message));
   }, 60 * 60 * 1000);
+  const activationInterval = setInterval(() => {
+    autoActivationCycle(state, dbPath).catch((err) => {
+      console.error('  Brain Cycle schedule failed:', (err as Error).message);
+    });
+  }, 60 * 60 * 1000);
   let shuttingDown = false;
   const shutdown = () => {
     if (shuttingDown) return;
@@ -2519,6 +2955,8 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     clearInterval(grabInterval);
     if (xFeedInterval) clearInterval(xFeedInterval);
     clearInterval(brainInterval);
+    clearInterval(activationInterval);
+    if (state.activationCycleTimer) clearTimeout(state.activationCycleTimer);
     stopXBrowserPoller();
     server.close(() => {
       try { saveDb(state.db, dbPath); } catch (err) { console.error('  Final database save failed:', (err as Error).message); }

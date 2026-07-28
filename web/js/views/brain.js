@@ -51,9 +51,9 @@ export function BrainView(root) {
     <div class="brain brain-friendly brain-x">
       <header class="brain-header brain-hero brain-command">
         <div>
-          <div class="brain-kicker">Topic workspace</div>
-          <h1 class="display">Make your saves usable.</h1>
-          <p class="brain-subtitle">Capture bookmarks, Radar items, notes, repos, and updates into topic spaces with citations and connections.</p>
+          <div class="brain-kicker">Knowledge workspaces</div>
+          <h1 class="display">Turn signals into work.</h1>
+          <p class="brain-subtitle">Projects, open questions, dossiers, and durable topics built from source-backed memory.</p>
         </div>
         <div class="brain-hero-actions">
           <div class="brain-ai-status" id="brain-ai-status">
@@ -95,11 +95,24 @@ export function BrainView(root) {
 
       <div class="brain-guide" id="brain-guide">
         <section class="brain-create-panel">
-          <div class="brain-section-title">Create a topic</div>
+          <div class="brain-section-title">Create a workspace</div>
           <form id="brain-create" class="brain-create-form">
             <label class="brain-field">
-              <span>Topic name</span>
+              <span>Type</span>
+              <select class="input" name="kind">
+                <option value="project">Project</option>
+                <option value="question">Open question</option>
+                <option value="dossier">Dossier</option>
+                <option value="topic">Topic</option>
+              </select>
+            </label>
+            <label class="brain-field">
+              <span>Name</span>
               <input class="input" name="name" placeholder="AI Research" required>
+            </label>
+            <label class="brain-field brain-field-wide">
+              <span>Focus question</span>
+              <input class="input" name="focusQuestion" placeholder="What decision or outcome should this workspace support?">
             </label>
             <label class="brain-field">
               <span>Words to watch</span>
@@ -109,7 +122,7 @@ export function BrainView(root) {
               <span>GitHub projects</span>
               <input class="input" name="repo" placeholder="garrytan/gbrain, karpathy/autoresearch">
             </label>
-            <button class="btn btn-primary brain-create-submit" type="submit"><span data-icon="plus"></span>Create topic</button>
+            <button class="btn btn-primary brain-create-submit" type="submit"><span data-icon="plus"></span>Create workspace</button>
           </form>
           <div class="brain-starters" id="brain-starters"></div>
         </section>
@@ -123,12 +136,12 @@ export function BrainView(root) {
 
       <div class="brain-workspace-grid">
         <section class="brain-topic-list-panel">
-          <div class="brain-section-title">Topics</div>
+          <div class="brain-section-title">Workspaces</div>
           <div id="brain-topics" class="brain-topic-list"><div class="placeholder">Loading...</div></div>
         </section>
 
         <section class="brain-topic-detail-panel">
-          <div class="brain-section-title">Topic details</div>
+          <div class="brain-section-title">Workspace details</div>
           <div id="brain-detail" class="brain-detail-panel"><div class="placeholder">Choose a topic.</div></div>
         </section>
 
@@ -241,7 +254,7 @@ export function BrainView(root) {
     renderWorkflows();
 
     $('#brain-metrics', root).innerHTML = [
-      { label: 'Topics', value: spaces.length, icon: 'folder-kanban' },
+      { label: 'Workspaces', value: spaces.length, icon: 'folder-kanban' },
       { label: 'Projects watched', value: repoCount, icon: 'github' },
       { label: 'Open updates', value: findings.length, icon: 'bell' },
       { label: 'Memory cards', value: memory.artifactCount || 0, icon: 'layers' },
@@ -254,14 +267,14 @@ export function BrainView(root) {
     `).join('');
 
     const nextStep = spaces.length === 0
-      ? 'Create one topic. AI Research is already filled in for you.'
+      ? 'Create one workspace. AI Research is already filled in for you.'
       : (memory.artifactCount || 0) === 0
         ? 'Run Clean up new saves to create memory cards from your existing sources.'
         : findings.length > 0
           ? 'Review open updates and weak spots before they get buried.'
           : stale.length > 0
             ? 'Some topics need a fresh watchlist update.'
-            : 'Your topics have source-backed memory and are ready to ask.';
+            : 'Your workspaces have source-backed memory and are ready to ask.';
     $('#brain-next-step', root).innerHTML = `
       <span data-icon="${spaces.length === 0 ? 'arrow-up-right' : findings.length > 0 ? 'bell' : 'check-circle-2'}"></span>
       <span>${escape(nextStep)}</span>
@@ -271,16 +284,16 @@ export function BrainView(root) {
       <button class="brain-topic-card ${state.selectedTopicId === space.id ? 'active' : ''}" data-topic-id="${escape(space.id)}">
         <span class="brain-topic-avatar">${escape(space.name.slice(0, 1).toUpperCase())}</span>
         <span class="brain-topic-main">
-          <strong>${escape(space.name)}</strong>
+          <strong>${escape(space.name)} <em class="workspace-kind">${escape(space.kind || 'project')}</em></strong>
           <span>${fmtNumber(space.bookmarkCount)} bookmarks · ${fmtNumber(space.repoCount)} projects · ${fmtNumber(space.openFindings)} updates</span>
-          <small>${escape((space.keywords || []).slice(0, 5).join(', ') || space.description || 'No watch words yet')}</small>
+          <small>${escape(space.focusQuestion || (space.keywords || []).slice(0, 5).join(', ') || space.description || 'No focus question yet')}</small>
         </span>
       </button>
     `).join('') : `
       <div class="brain-empty">
         <span data-icon="folder-plus"></span>
-        <strong>No topics yet</strong>
-        <p>Create one topic and Xtreme will gather matching bookmarks and updates.</p>
+        <strong>No workspaces yet</strong>
+        <p>Create one workspace and Xtreme will gather matching bookmarks and updates.</p>
       </div>
     `;
 
@@ -343,8 +356,9 @@ export function BrainView(root) {
     $('#brain-detail', root).innerHTML = `
       <div class="brain-topic-detail-header">
         <div>
+          <div class="workspace-detail-label">${escape(topic.kind || 'project')} · ${escape(topic.status || 'active')}</div>
           <h2>${escape(topic.name)}</h2>
-          <p>${escape(topic.description || (topic.keywords || []).join(', ') || 'This topic is ready for bookmarks, notes, and watched projects.')}</p>
+          <p>${escape(topic.focusQuestion || topic.description || (topic.keywords || []).join(', ') || 'This workspace is ready for bookmarks, notes, and watched projects.')}</p>
         </div>
         <div class="brain-topic-actions">
           <button class="btn" id="topic-seed"><span data-icon="wand-sparkles"></span>Gather bookmarks</button>
@@ -532,13 +546,15 @@ export function BrainView(root) {
     try {
       const result = await api.createBrainSpace({
         name,
+        kind: String(data.get('kind') || 'project'),
+        focusQuestion: String(data.get('focusQuestion') || '').trim(),
         keywords: String(data.get('keywords') || '').split(',').map((k) => k.trim()).filter(Boolean),
         repos,
       });
       await api.seedBrainSpace(result.space.id);
       form.reset();
       state.selectedTopicId = result.space.id;
-      toast('Topic created');
+      toast('Workspace created');
       await runWorkflow('capture', result.space.id, false);
     } catch (err) {
       toast(`Could not create topic: ${err.message}`);

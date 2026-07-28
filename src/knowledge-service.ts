@@ -22,6 +22,13 @@ export interface SaveSynthesisInput {
   filePath?: string;
 }
 
+export class KnowledgeTopicNotFoundError extends Error {
+  constructor(readonly topicId: string) {
+    super(`Topic not found: ${topicId}`);
+    this.name = 'KnowledgeTopicNotFoundError';
+  }
+}
+
 function tableExists(db: Database, table: string): boolean {
   return Boolean(db.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, [table])[0]?.values?.length);
 }
@@ -42,6 +49,23 @@ function relevance(text: string, terms: string[], base: number): number {
 
 function evidenceId(...parts: string[]): string {
   return crypto.createHash('sha1').update(parts.join('\u001f')).digest('hex').slice(0, 24);
+}
+
+export function requireActiveKnowledgeTopicFromDb(
+  db: Database,
+  rawTopicId?: string | null,
+): string | null {
+  const topicId = String(rawTopicId ?? '').trim();
+  if (!topicId) return null;
+  initBrainSchema(db);
+  const rows = db.exec(
+    `SELECT 1 FROM brain_spaces
+     WHERE id = ? AND COALESCE(status, 'active') = 'active'
+     LIMIT 1`,
+    [topicId],
+  );
+  if (!rows[0]?.values.length) throw new KnowledgeTopicNotFoundError(topicId);
+  return topicId;
 }
 
 export function listKnowledgeTopicsFromDb(db: Database): KnowledgeTopic[] {
@@ -106,16 +130,36 @@ export function retrieveKnowledgeEvidenceFromDb(db: Database, query: string, opt
 
   if (tableExists(db, 'bookmarks')) {
     const hasFts = tableExists(db, 'bookmarks_fts');
+    const bookmarkTopicFilter = options.topicId
+      ? `AND EXISTS (
+           SELECT 1 FROM brain_space_bookmarks sb
+           WHERE sb.bookmark_id = b.id AND sb.space_id = ?
+         )`
+      : '';
     const rows = hasFts
       ? db.exec(`
           SELECT b.id, b.url, b.text, b.author_handle, b.author_name,
                  COALESCE(b.bookmarked_at, b.posted_at, b.synced_at), bm25(bookmarks_fts, 5.0, 1.0, 1.0)
           FROM bookmarks b JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid
-          WHERE bookmarks_fts MATCH ?
+          WHERE bookmarks_fts MATCH ? ${bookmarkTopicFilter}
           ORDER BY bm25(bookmarks_fts, 5.0, 1.0, 1.0) ASC
           LIMIT ?
-        `, [searchPlan.broadQuery, Math.max(limit * 3, 50)])
-      : db.exec(`SELECT id, url, text, author_handle, author_name, COALESCE(bookmarked_at, posted_at, synced_at), 0 FROM bookmarks LIMIT ?`, [Math.max(limit * 20, 500)]);
+        `, options.topicId
+          ? [searchPlan.broadQuery, options.topicId, Math.max(limit * 3, 50)]
+          : [searchPlan.broadQuery, Math.max(limit * 3, 50)])
+      : db.exec(
+        `SELECT b.id, b.url, b.text, b.author_handle, b.author_name,
+                COALESCE(b.bookmarked_at, b.posted_at, b.synced_at), 0
+         FROM bookmarks b
+         ${options.topicId ? `WHERE EXISTS (
+           SELECT 1 FROM brain_space_bookmarks sb
+           WHERE sb.bookmark_id = b.id AND sb.space_id = ?
+         )` : ''}
+         LIMIT ?`,
+        options.topicId
+          ? [options.topicId, Math.max(limit * 20, 500)]
+          : [Math.max(limit * 20, 500)],
+      );
     for (const row of rows[0]?.values ?? []) {
       if (!matches([row[2], row[3], row[4]])) continue;
       const id = String(row[0]);
@@ -130,7 +174,15 @@ export function retrieveKnowledgeEvidenceFromDb(db: Database, query: string, opt
   }
 
   if (tableExists(db, 'bookmark_notes')) {
-    const rows = db.exec(`SELECT n.bookmark_id, n.note, n.updated_at, b.url, b.text FROM bookmark_notes n LEFT JOIN bookmarks b ON b.id = n.bookmark_id`);
+    const rows = db.exec(
+      `SELECT n.bookmark_id, n.note, n.updated_at, b.url, b.text
+       FROM bookmark_notes n LEFT JOIN bookmarks b ON b.id = n.bookmark_id
+       ${options.topicId ? `WHERE EXISTS (
+         SELECT 1 FROM brain_space_bookmarks sb
+         WHERE sb.bookmark_id = n.bookmark_id AND sb.space_id = ?
+       )` : ''}`,
+      options.topicId ? [options.topicId] : [],
+    );
     for (const row of rows[0]?.values ?? []) {
       if (!matches([row[1], row[4]])) continue;
       const bookmarkId = String(row[0]);
@@ -143,7 +195,15 @@ export function retrieveKnowledgeEvidenceFromDb(db: Database, query: string, opt
   }
 
   if (tableExists(db, 'bookmark_highlights')) {
-    const rows = db.exec(`SELECT h.id, h.bookmark_id, h.text_fragment, h.color, h.created_at, b.url, b.text FROM bookmark_highlights h LEFT JOIN bookmarks b ON b.id = h.bookmark_id`);
+    const rows = db.exec(
+      `SELECT h.id, h.bookmark_id, h.text_fragment, h.color, h.created_at, b.url, b.text
+       FROM bookmark_highlights h LEFT JOIN bookmarks b ON b.id = h.bookmark_id
+       ${options.topicId ? `WHERE EXISTS (
+         SELECT 1 FROM brain_space_bookmarks sb
+         WHERE sb.bookmark_id = h.bookmark_id AND sb.space_id = ?
+       )` : ''}`,
+      options.topicId ? [options.topicId] : [],
+    );
     for (const row of rows[0]?.values ?? []) {
       if (!matches([row[2], row[6]])) continue;
       candidates.push({
@@ -203,7 +263,9 @@ export async function retrieveKnowledgeEvidence(query: string, options: Retrieve
   const db = await openDb(twitterBookmarksIndexPath());
   try {
     const dbEvidence = retrieveKnowledgeEvidenceFromDb(db, query, options);
-    const concepts = options.includeConcepts === false ? [] : await conceptEvidence(query, options.limit ?? 30);
+    const concepts = options.includeConcepts === false || options.topicId
+      ? []
+      : await conceptEvidence(query, options.limit ?? 30);
     return [...dbEvidence, ...concepts].sort((a, b) => b.score - a.score).slice(0, options.limit ?? 30);
   } finally {
     db.close();
@@ -212,10 +274,11 @@ export async function retrieveKnowledgeEvidence(query: string, options: Retrieve
 
 export function saveSynthesisFromDb(db: Database, input: SaveSynthesisInput): KnowledgeItem {
   initBrainSchema(db);
+  const topicId = requireActiveKnowledgeTopicFromDb(db, input.topicId);
   const now = new Date().toISOString();
   const sourceId = evidenceId('synthesis', input.question, input.answer);
   const result = upsertBrainArtifactFromDb(db, {
-    sourceType: 'synthesis', sourceId, spaceId: input.topicId ?? null, title: input.question, body: input.answer,
+    sourceType: 'synthesis', sourceId, spaceId: topicId, title: input.question, body: input.answer,
     author: 'You + AI', sourceLabel: 'Saved answer', capturedAt: now, confidence: 0.8,
     rawJson: JSON.stringify({ question: input.question, evidence: (input.evidence ?? []).map((item) => item.id), filePath: input.filePath ?? null }),
   });

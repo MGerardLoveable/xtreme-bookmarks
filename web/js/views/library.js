@@ -12,6 +12,26 @@ const PAGE_SIZE = 50;
 const CATEGORY_OPTIONS = ['unclassified', 'tool', 'security', 'technique', 'launch', 'research', 'opinion', 'commerce'];
 const LS_LIBRARY_PRESENTATION = 'xb.library.presentation';
 const LS_LIBRARY_MODE = 'xb.library.mode';
+const LS_LIBRARY_SECTION = 'xb.library.section';
+const TODAY_REASON_LABELS = {
+  overdue_review: 'Review due',
+  stale_claim: 'Recheck this claim',
+  surprising_connection: 'Connects active work',
+  active_project: 'Active project',
+  new_capture: 'New signal',
+  forgotten_gem: 'Forgotten gem',
+  worth_revisiting: 'Worth revisiting',
+};
+const INTENT_LABELS = {
+  learn: 'Learn',
+  build: 'Build',
+  try: 'Try',
+  research: 'Research',
+  contact: 'Contact',
+  buy: 'Buy',
+  inspiration: 'Inspiration',
+  reference: 'Reference',
+};
 
 function highlightSearchText(value, tokens) {
   const text = String(value || '');
@@ -88,8 +108,10 @@ export function LibraryView(root) {
     sort: 'desc',
     presentation: localStorage.getItem(LS_LIBRARY_PRESENTATION) || 'refined',
     displayMode: localStorage.getItem(LS_LIBRARY_MODE) || 'reading',
+    section: localStorage.getItem(LS_LIBRARY_SECTION) || 'today',
     offset: 0,
     total: 0,
+    libraryTotal: 0,
     bookmarks: [],
     activeId: null,
     loading: false,
@@ -97,6 +119,7 @@ export function LibraryView(root) {
     facets: { categories: [], domains: [], collections: [], authors: [] },
     inbox: false,
     search: null,
+    projects: [],
   };
   let listController = null;
   let detailController = null;
@@ -136,11 +159,16 @@ export function LibraryView(root) {
         <header class="library-context">
           <div>
             <span class="library-eyebrow">Signal archive</span>
-            <h1>Research Library</h1>
+            <h1 id="lib-section-title">Today</h1>
           </div>
-          <div class="library-context-meta">
-            <span class="live-dot" aria-hidden="true"></span>
-            <span>Local index</span>
+          <div class="library-context-actions">
+            <div class="toolbar-segment library-section-switch" id="lib-section" aria-label="Library section">
+              <button class="segment-btn" data-section="today"><span data-icon="sun"></span>Today</button>
+              <button class="segment-btn" data-section="archive"><span data-icon="layers"></span>Archive</button>
+            </div>
+            <button class="icon-btn" id="lib-today-refresh" title="Refresh Today" aria-label="Refresh Today">
+              <span data-icon="refresh-cw"></span>
+            </button>
           </div>
         </header>
         <div class="library-toolbar">
@@ -237,6 +265,9 @@ export function LibraryView(root) {
     presentation: $('#lib-presentation', root),
     presentationLabel: $('#lib-presentation-label', root),
     displayMode: $('#lib-display-mode', root),
+    section: $('#lib-section', root),
+    sectionTitle: $('#lib-section-title', root),
+    todayRefresh: $('#lib-today-refresh', root),
     active: $('#lib-active', root),
     summary: $('#lib-summary', root),
     grabStatus: $('#lib-grab-status', root),
@@ -253,6 +284,36 @@ export function LibraryView(root) {
 
   const shell = $('.library', root);
 
+  function applySection() {
+    const isToday = state.section === 'today';
+    shell.classList.toggle('library-today', isToday);
+    els.sectionTitle.textContent = isToday ? 'Today' : 'Research Library';
+    els.todayRefresh.hidden = !isToday;
+    els.sort.hidden = isToday;
+    els.clear.hidden = isToday;
+    $('#lib-inbox', root).hidden = isToday;
+    $$('.segment-btn', els.section).forEach((btn) => {
+      const active = btn.dataset.section === state.section;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+  }
+
+  function setSection(section, options = {}) {
+    const next = section === 'archive' ? 'archive' : 'today';
+    const changed = state.section !== next;
+    state.section = next;
+    localStorage.setItem(LS_LIBRARY_SECTION, next);
+    state.offset = 0;
+    state.search = null;
+    if (changed) {
+      els.search.value = next === 'today' ? '' : state.filters.q;
+    }
+    applySection();
+    renderActive();
+    if (options.load !== false && (changed || options.refresh)) load(false, Boolean(options.refresh));
+  }
+
   function applyPresentation() {
     const presentation = state.presentation === 'classic' ? 'classic' : 'refined';
     const mode = ['reading', 'triage', 'gallery'].includes(state.displayMode) ? state.displayMode : 'reading';
@@ -267,6 +328,7 @@ export function LibraryView(root) {
       btn.classList.toggle('active', btn.dataset.mode === mode);
       btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode));
     });
+    applySection();
   }
 
   function setPresentation(next) {
@@ -308,6 +370,7 @@ export function LibraryView(root) {
       state.facets.domains = (doms.domains || []).filter((d) => d.name);
       state.facets.collections = cols.collections || [];
       state.facets.authors = stats.topAuthors || [];
+      state.libraryTotal = stats.totalBookmarks || 0;
       state.unreadCount = unread.count;
       renderRails();
     } catch (err) {
@@ -318,7 +381,7 @@ export function LibraryView(root) {
   function renderRails() {
     // Status
     const statusItems = [
-      { key: null, label: 'All', count: state.total || undefined },
+      { key: null, label: 'All', count: state.libraryTotal || state.total || undefined },
       { key: 'unread', label: 'Unread', count: state.unreadCount },
       { key: 'read', label: 'Read' },
     ];
@@ -383,6 +446,10 @@ export function LibraryView(root) {
   }
 
   function renderActive() {
+    if (state.section === 'today') {
+      els.active.innerHTML = '';
+      return;
+    }
     const chips = [];
     const f = state.filters;
     if (f.q)          chips.push({ k: 'q', label: `“${f.q}”`, icon: 'search' });
@@ -405,11 +472,15 @@ export function LibraryView(root) {
 
   // ── Filter state ──────────────────────────────────────────────────────────
   function setFilter(patch) {
+    const next = { ...patch };
+    const hasQuery = Object.prototype.hasOwnProperty.call(next, 'q');
+    setSection('archive', { load: false });
     // Toggle behavior: clicking the same rail item clears it.
-    Object.keys(patch).forEach((k) => {
-      if (state.filters[k] === patch[k] && patch[k] !== null) patch[k] = null;
+    Object.keys(next).forEach((k) => {
+      if (k !== 'q' && state.filters[k] === next[k] && next[k] !== null) next[k] = null;
     });
-    Object.assign(state.filters, patch);
+    Object.assign(state.filters, next);
+    if (hasQuery) els.search.value = state.filters.q || '';
     state.offset = 0;
     renderActive();
     renderRails();
@@ -417,6 +488,7 @@ export function LibraryView(root) {
   }
 
   function clearAll() {
+    setSection('archive', { load: false });
     state.filters = { q: '', author: null, category: null, domain: null, collection: null, readStatus: null };
     els.search.value = '';
     state.inbox = false;
@@ -428,12 +500,34 @@ export function LibraryView(root) {
   }
 
   // ── Load bookmarks ────────────────────────────────────────────────────────
-  async function load(append = false) {
+  async function load(append = false, refreshToday = false) {
     listController?.abort();
-    listController = new AbortController();
+    const controller = new AbortController();
+    listController = controller;
+    const requestedSection = state.section;
     state.loading = true;
     if (!append) renderSkeleton();
     try {
+      if (requestedSection === 'today') {
+        const result = await api.today(7, refreshToday, { signal: controller.signal });
+        if (controller.signal.aborted || state.section !== requestedSection) return;
+        state.total = result.items?.length || 0;
+        state.search = null;
+        state.hasMore = false;
+        state.bookmarks = (result.items || []).map((item) => ({
+          ...item.bookmark,
+          _today: {
+            id: item.id,
+            reason: item.reason,
+            score: item.score,
+            scoreBreakdown: item.scoreBreakdown || [],
+          },
+        }));
+        renderList();
+        renderSummary();
+        if (!append) renderRails();
+        return;
+      }
       const params = {
         q: state.filters.q || undefined,
         author: state.filters.author || undefined,
@@ -446,7 +540,8 @@ export function LibraryView(root) {
         limit: PAGE_SIZE,
         offset: state.offset,
       };
-      const { bookmarks, total, search } = await api.listBookmarks(params, { signal: listController.signal });
+      const { bookmarks, total, search } = await api.listBookmarks(params, { signal: controller.signal });
+      if (controller.signal.aborted || state.section !== requestedSection) return;
       state.total = total;
       state.search = search || null;
       state.hasMore = state.offset + bookmarks.length < total;
@@ -458,13 +553,20 @@ export function LibraryView(root) {
       if (err.name === 'AbortError') return;
       els.list.innerHTML = `<div class="empty-state"><h3>Couldn't load</h3><p>${escape(err.message)}</p></div>`;
     } finally {
-      state.loading = false;
+      if (listController === controller) state.loading = false;
     }
   }
 
   function renderSummary() {
     const total = state.total;
     const shown = state.bookmarks.length;
+    if (state.section === 'today') {
+      els.summary.innerHTML = `
+        <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> signals selected for today</span>
+        <span class="summary-context">Balanced across goals, freshness, and forgotten value</span>
+      `;
+      return;
+    }
     const activeFilter = state.filters.collection || state.filters.category || state.filters.domain || state.filters.author || state.filters.readStatus || '';
     els.summary.innerHTML = `
       <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> of ${fmtNumber(total)} results</span>
@@ -509,11 +611,17 @@ export function LibraryView(root) {
     if (!state.bookmarks.length) {
       els.list.innerHTML = `
         <div class="empty-state">
-          <span class="empty-icon" data-icon="inbox"></span>
-          <h3>No bookmarks found</h3>
-          <p>${state.filters.q ? `No tweet text, quoted post, note, highlight, author, link, or domain matched “${escape(state.filters.q)}”.` : 'Try removing a filter or running Grab.'}</p>
+          <span class="empty-icon" data-icon="${state.section === 'today' ? 'check-circle' : 'inbox'}"></span>
+          <h3>${state.section === 'today' ? 'Today is clear' : 'No bookmarks found'}</h3>
+          <p>${state.section === 'today'
+            ? 'Refresh when you want another small set of useful signals.'
+            : state.filters.q
+              ? `No tweet text, quoted post, note, highlight, author, link, or domain matched “${escape(state.filters.q)}”.`
+              : 'Try removing a filter or running Grab.'}</p>
+          ${state.section === 'today' ? '<button class="btn" id="lib-empty-refresh"><span data-icon="refresh-cw"></span>Refresh</button>' : ''}
         </div>`;
       renderIcons(els.list);
+      $('#lib-empty-refresh', els.list)?.addEventListener('click', () => load(false, true));
       return;
     }
 
@@ -539,6 +647,7 @@ export function LibraryView(root) {
 
   function renderRow(b, idx) {
     const active = b.id === state.activeId;
+    const today = b._today;
     const mediaItems = mediaItemsFor(b);
     const avatar = b.authorProfileImageUrl
       ? `<img src="${escape(b.authorProfileImageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'bookmark-avatar-fallback',textContent:'${escape((b.authorName || b.authorHandle || '?').slice(0, 1).toUpperCase())}'}))">`
@@ -557,16 +666,25 @@ export function LibraryView(root) {
     const quotedContext = matchedFields.includes('quoted post') && b.quotedText
       ? `<div class="search-match-context"><span>Quoted</span>${highlightSearchText(b.quotedText, searchTokens)}</div>`
       : '';
+    const todayReason = today ? TODAY_REASON_LABELS[today.reason] || 'Worth revisiting' : '';
+    const todayWhy = today
+      ? (today.scoreBreakdown || []).slice(0, 2).map((part) => part.label).join(' · ')
+      : '';
     const row = el('article', {
-      class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}`,
+      class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}${today ? ' today-row' : ''}`,
       dataset: { id: b.id, idx: String(idx) },
       tabindex: '0',
-      role: 'button',
       'aria-label': `Open bookmark by ${b.authorName || b.authorHandle || 'Unknown'}`,
     });
     row.innerHTML = `
       <div class="bookmark-avatar">${avatar}</div>
       <div class="bookmark-body">
+        ${today ? `
+          <div class="today-reason">
+            <span><span data-icon="sparkles"></span>${escape(todayReason)}</span>
+            <span title="${escape(todayWhy)}">${escape(todayWhy)}</span>
+          </div>
+        ` : ''}
         <div class="bookmark-meta">
           <span class="bookmark-author">${escape(b.authorName || b.authorHandle || 'Unknown')}</span>
           ${b.authorHandle ? `<span class="bookmark-handle">@${escape(b.authorHandle)}</span>` : ''}
@@ -578,6 +696,13 @@ export function LibraryView(root) {
         ${quotedContext}
         ${matchLabel}
         ${tags ? `<div class="bookmark-tags">${tags}</div>` : ''}
+        ${today ? `
+          <div class="today-row-actions" aria-label="Today actions">
+            <button class="btn btn-sm" data-today-action="done"><span data-icon="check"></span>Done</button>
+            <button class="btn btn-sm btn-ghost" data-today-action="snooze"><span data-icon="clock-3"></span>Snooze</button>
+            <button class="icon-btn" data-today-action="dismiss" title="Dismiss from Today" aria-label="Dismiss from Today"><span data-icon="x"></span></button>
+          </div>
+        ` : ''}
       </div>
       ${mediaThumb(mediaItems)}
       <div class="bookmark-row-actions">
@@ -593,6 +718,24 @@ export function LibraryView(root) {
       </div>
     `;
     wireMediaFallbacks(row);
+    row.querySelectorAll('[data-today-action]').forEach((action) => {
+      action.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        action.disabled = true;
+        try {
+          await api.todayAction(today.id, action.dataset.todayAction);
+          state.bookmarks = state.bookmarks.filter((item) => item.id !== b.id);
+          state.total = state.bookmarks.length;
+          if (state.activeId === b.id) clearDetail();
+          renderList();
+          renderSummary();
+          toast(action.dataset.todayAction === 'snooze' ? 'Snoozed for a week' : 'Today updated');
+        } catch (err) {
+          action.disabled = false;
+          toast(`Today update failed: ${err.message}`);
+        }
+      });
+    });
     row.querySelectorAll('[data-row-action]').forEach((action) => {
       action.addEventListener('click', async (event) => {
         event.stopPropagation();
@@ -623,6 +766,7 @@ export function LibraryView(root) {
     });
     row.addEventListener('click', () => select(b.id));
     row.addEventListener('keydown', (event) => {
+      if (event.target !== row) return;
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         select(b.id);
@@ -640,7 +784,11 @@ export function LibraryView(root) {
     $$('.bookmark-row', els.list).forEach((r) => r.classList.toggle('active', r.dataset.id === id));
 
     try {
-      const b = await api.getBookmark(id, { signal: detailController.signal });
+      const [b, projectData] = await Promise.all([
+        api.getBookmark(id, { signal: detailController.signal }),
+        api.brainSpaces().catch(() => ({ spaces: [] })),
+      ]);
+      state.projects = projectData.spaces || [];
       renderDetail(b);
       shell.classList.add('detail-open');
     } catch (err) {
@@ -707,6 +855,12 @@ export function LibraryView(root) {
       : [currentCategory, ...CATEGORY_OPTIONS];
     const collections = Array.isArray(b.collections) ? b.collections : [];
     const mediaItems = mediaItemsFor(b);
+    const activation = b.activation || {};
+    const profile = activation.profile || {};
+    const enrichment = activation.enrichment || null;
+    const projects = Array.isArray(activation.projects) ? activation.projects : [];
+    const availableProjects = (state.projects || []).filter((space) => space.status !== 'archived');
+    const nextReviewDate = profile.nextReviewAt ? String(profile.nextReviewAt).slice(0, 10) : '';
 
     els.detail.innerHTML = `
       <div class="detail">
@@ -756,20 +910,104 @@ export function LibraryView(root) {
           </button>
         </div>
 
-        <div class="detail-danger">
-          <div>
-            <div class="detail-section-title">Delete</div>
-            <p>Remove it from this library, or also remove it from your saved Bookmarks on X.</p>
+        <section class="detail-activation">
+          <div class="detail-section-heading">
+            <div>
+              <span class="detail-section-kicker">Activation</span>
+              <div class="detail-section-title">Make this useful</div>
+            </div>
+            <button class="btn btn-sm" id="detail-activation-save"><span data-icon="check"></span>Save</button>
           </div>
-          <div class="detail-danger-actions">
-            <button class="btn btn-block btn-danger-ghost" id="detail-delete-local">
-              <span data-icon="trash"></span>Remove locally
-            </button>
-            <button class="btn btn-block btn-danger" id="detail-delete-x">
-              <span data-icon="trash"></span>Remove from X too
-            </button>
+          <div class="activation-fields">
+            <label class="detail-field">
+              <span>Intent</span>
+              <select class="input detail-select" id="detail-intent">
+                <option value="">Not set</option>
+                ${Object.entries(INTENT_LABELS).map(([value, label]) => `
+                  <option value="${value}" ${profile.intent === value ? 'selected' : ''}>${label}</option>
+                `).join('')}
+              </select>
+            </label>
+            <label class="detail-field activation-importance">
+              <span>Importance <output id="detail-importance-value">${Number(profile.importance || 0)}</output>/5</span>
+              <input id="detail-importance" type="range" min="0" max="5" step="1" value="${Number(profile.importance || 0)}">
+            </label>
+            <label class="detail-field">
+              <span>Status</span>
+              <select class="input detail-select" id="detail-activation-status">
+                ${['active', 'done', 'archived'].map((value) => `
+                  <option value="${value}" ${(profile.status || 'active') === value ? 'selected' : ''}>${value.charAt(0).toUpperCase() + value.slice(1)}</option>
+                `).join('')}
+              </select>
+            </label>
+            <label class="detail-field">
+              <span>Review</span>
+              <input class="input" id="detail-review-date" type="date" value="${escape(nextReviewDate)}">
+            </label>
           </div>
-        </div>
+          <label class="detail-field">
+            <span>Why I saved this</span>
+            <textarea class="activation-why" id="detail-why-saved" placeholder="The decision, project, or question this could help with…">${escape(profile.whySaved || '')}</textarea>
+          </label>
+
+          <div class="activation-distill">
+            <div class="activation-distill-heading">
+              <span><span data-icon="sparkles"></span>Brain Cycle</span>
+              <span>${enrichment ? `Updated ${escape(fmtRelativeTime(enrichment.enrichedAt))} ago` : 'Not distilled yet'}</span>
+            </div>
+            ${enrichment ? `
+              <div class="activation-insight">
+                <span>Summary</span>
+                <p>${escape(enrichment.summary)}</p>
+              </div>
+              <div class="activation-insight">
+                <span>Key claim</span>
+                <p>${escape(enrichment.keyClaim)}</p>
+              </div>
+              <div class="activation-insight">
+                <span>Why it matters</span>
+                <p>${escape(enrichment.whyItMatters)}</p>
+              </div>
+              <div class="activation-insight activation-next">
+                <span>Next move</span>
+                <p>${escape(enrichment.suggestedAction)}</p>
+              </div>
+            ` : `
+              <button class="btn btn-sm" id="detail-run-cycle"><span data-icon="refresh-cw"></span>Run Brain Cycle</button>
+            `}
+          </div>
+
+          <div class="activation-projects">
+            <div class="detail-field">
+              <span>Workspaces</span>
+              <div class="activation-project-list">
+                ${projects.length ? projects.map((project) => `
+                  <button class="chip chip-removable activation-project-chip" data-project-id="${escape(project.id)}" title="Remove from ${escape(project.name)}">
+                    <span data-icon="folder-kanban"></span>${escape(project.name)}<small>${escape(project.role)}</small><span data-icon="x"></span>
+                  </button>
+                `).join('') : '<span class="placeholder">No workspace yet</span>'}
+              </div>
+            </div>
+            <div class="activation-project-add">
+              <select class="input detail-select" id="detail-project">
+                <option value="">Choose workspace</option>
+                ${availableProjects.map((space) => `
+                  <option value="${escape(space.id)}">${escape(space.name)} · ${escape(space.kind || 'project')}</option>
+                `).join('')}
+              </select>
+              <select class="input detail-select" id="detail-project-role" aria-label="Workspace role">
+                ${['evidence', 'inspiration', 'task', 'decision', 'reference'].map((role) => `<option value="${role}">${role}</option>`).join('')}
+              </select>
+              <button class="icon-btn" id="detail-project-add" title="Add to workspace" aria-label="Add to workspace"><span data-icon="plus"></span></button>
+            </div>
+          </div>
+
+          <div class="activation-commands">
+            <button class="btn btn-sm" id="detail-ask"><span data-icon="message-circle"></span>Ask with this</button>
+            <button class="btn btn-sm" id="detail-context-pack"><span data-icon="copy"></span>Context pack</button>
+            ${b.authorHandle ? `<button class="btn btn-sm" id="detail-dossier"><span data-icon="user-round"></span>Author dossier</button>` : ''}
+          </div>
+        </section>
 
         <div class="detail-organize">
           <div class="detail-section-title">Organize</div>
@@ -810,6 +1048,21 @@ export function LibraryView(root) {
             ${b.primaryDomain ? `<div>Primary domain · ${escape(b.primaryDomain)}</div>` : ''}
           </div>
         </div>
+
+        <div class="detail-danger">
+          <div>
+            <div class="detail-section-title">Delete</div>
+            <p>Remove it from this library, or also remove it from your saved Bookmarks on X.</p>
+          </div>
+          <div class="detail-danger-actions">
+            <button class="btn btn-block btn-danger-ghost" id="detail-delete-local">
+              <span data-icon="trash"></span>Remove locally
+            </button>
+            <button class="btn btn-block btn-danger" id="detail-delete-x">
+              <span data-icon="trash"></span>Remove from X too
+            </button>
+          </div>
+        </div>
       </div>
     `;
 
@@ -817,6 +1070,123 @@ export function LibraryView(root) {
     wireMediaFallbacks(els.detail);
 
     // Wire up actions
+    const importance = $('#detail-importance', els.detail);
+    const importanceValue = $('#detail-importance-value', els.detail);
+    importance?.addEventListener('input', () => {
+      importanceValue.value = importance.value;
+      importanceValue.textContent = importance.value;
+    });
+
+    $('#detail-activation-save', els.detail)?.addEventListener('click', async () => {
+      const btn = $('#detail-activation-save', els.detail);
+      btn.disabled = true;
+      try {
+        const reviewDate = $('#detail-review-date', els.detail).value;
+        const res = await api.saveActivation(b.id, {
+          intent: $('#detail-intent', els.detail).value || null,
+          whySaved: $('#detail-why-saved', els.detail).value,
+          importance: Number($('#detail-importance', els.detail).value),
+          status: $('#detail-activation-status', els.detail).value,
+          nextReviewAt: reviewDate ? new Date(`${reviewDate}T12:00:00`).toISOString() : null,
+        });
+        b.activation = res.activation;
+        patchBookmark(b.id, { activation: {
+          ...(state.bookmarks.find((item) => item.id === b.id)?.activation || {}),
+          profile: res.profile,
+        } });
+        renderList();
+        renderDetail(b);
+        toast('Activation saved');
+      } catch (err) {
+        btn.disabled = false;
+        toast(`Activation failed: ${err.message}`);
+      }
+    });
+
+    $('#detail-run-cycle', els.detail)?.addEventListener('click', async () => {
+      const btn = $('#detail-run-cycle', els.detail);
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Distilling';
+      try {
+        await api.runBrainCycle(1, { bookmarkIds: [b.id], force: true });
+        const refreshed = await api.getBookmark(b.id);
+        Object.assign(b, refreshed);
+        renderDetail(b);
+        toast('Brain Cycle complete');
+      } catch (err) {
+        btn.disabled = false;
+        toast(`Brain Cycle failed: ${err.message}`);
+      }
+    });
+
+    $('#detail-project-add', els.detail)?.addEventListener('click', async () => {
+      const projectId = $('#detail-project', els.detail).value;
+      const role = $('#detail-project-role', els.detail).value;
+      if (!projectId) { toast('Choose a workspace'); return; }
+      try {
+        const res = await api.addBookmarkProject(b.id, projectId, role);
+        b.activation = res.activation;
+        renderDetail(b);
+        toast('Added to workspace');
+      } catch (err) { toast(`Workspace update failed: ${err.message}`); }
+    });
+
+    $$('.activation-project-chip', els.detail).forEach((chip) => {
+      chip.addEventListener('click', async () => {
+        try {
+          const res = await api.removeBookmarkProject(b.id, chip.dataset.projectId);
+          b.activation = res.activation;
+          renderDetail(b);
+          toast('Removed from workspace');
+        } catch (err) { toast(`Workspace update failed: ${err.message}`); }
+      });
+    });
+
+    $('#detail-ask', els.detail)?.addEventListener('click', () => {
+      const firstProject = b.activation?.projects?.[0]?.id || null;
+      document.dispatchEvent(new CustomEvent('xb:navigate', {
+        detail: {
+          view: 'ask',
+          ask: {
+            question: `What is useful, actionable, or uncertain in this saved post by @${b.authorHandle || 'unknown'}: ${String(b.text || '').slice(0, 500)}`,
+            topicId: firstProject,
+          },
+        },
+      }));
+    });
+
+    $('#detail-context-pack', els.detail)?.addEventListener('click', async () => {
+      const btn = $('#detail-context-pack', els.detail);
+      btn.disabled = true;
+      try {
+        const result = await api.contextPack({
+          query: String(b.text || '').slice(0, 600),
+          title: `Context from @${b.authorHandle || 'bookmark'}`,
+          topicId: b.activation?.projects?.[0]?.id || null,
+          synthesis: b.activation?.enrichment?.summary || '',
+          limit: 12,
+        });
+        await copy(result.pack.markdown);
+        toast(`Context pack copied · ${result.pack.evidence.length} sources`);
+      } catch (err) {
+        toast(`Context pack failed: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $('#detail-dossier', els.detail)?.addEventListener('click', async () => {
+      const btn = $('#detail-dossier', els.detail);
+      btn.disabled = true;
+      try {
+        const result = await api.dossier(b.authorHandle);
+        renderDossier(result.dossier, b);
+      } catch (err) {
+        btn.disabled = false;
+        toast(`Dossier failed: ${err.message}`);
+      }
+    });
+
     $('#detail-read', els.detail).addEventListener('click', async () => {
       try {
         const res = await api.setRead(b.id, !b.isRead);
@@ -947,6 +1317,97 @@ export function LibraryView(root) {
     noteEl.addEventListener('input', saveNote);
   }
 
+  function renderDossier(dossier, sourceBookmark) {
+    const maxMonth = Math.max(1, ...(dossier.timeline || []).map((item) => Number(item.count || 0)));
+    const avatar = dossier.author.profileImageUrl
+      ? `<img class="dossier-avatar" src="${escape(dossier.author.profileImageUrl)}" alt="" referrerpolicy="no-referrer">`
+      : `<div class="dossier-avatar dossier-avatar-fallback">${escape((dossier.author.name || dossier.author.handle || '?').slice(0, 1).toUpperCase())}</div>`;
+    els.detail.innerHTML = `
+      <div class="detail dossier">
+        <div class="detail-header">
+          <button class="icon-btn" id="dossier-back" title="Back to bookmark" aria-label="Back to bookmark"><span data-icon="arrow-left"></span></button>
+          ${avatar}
+          <div class="detail-author">
+            <span class="detail-author-name">${escape(dossier.author.name)}</span>
+            <span class="detail-author-handle">@${escape(dossier.author.handle)}</span>
+          </div>
+          <a class="icon-btn" href="https://x.com/${encodeURIComponent(dossier.author.handle)}" target="_blank" rel="noopener" title="Open on X" aria-label="Open on X"><span data-icon="external-link"></span></a>
+        </div>
+
+        <div class="dossier-title">
+          <span class="detail-section-kicker">Author dossier</span>
+          <h2>Signal history</h2>
+        </div>
+
+        <div class="dossier-metrics">
+          <div><strong>${fmtNumber(dossier.totals.bookmarks)}</strong><span>Bookmarks</span></div>
+          <div><strong>${fmtNumber(dossier.totals.notes)}</strong><span>Your notes</span></div>
+          <div><strong>${fmtNumber(dossier.totals.enriched)}</strong><span>Distilled</span></div>
+          <div><strong>${fmtNumber(dossier.totals.unread)}</strong><span>Unread</span></div>
+        </div>
+
+        ${(dossier.timeline || []).length ? `
+          <section class="dossier-section">
+            <div class="detail-section-title">Capture rhythm</div>
+            <div class="dossier-timeline">
+              ${dossier.timeline.map((item) => `
+                <span style="height:${Math.max(8, Math.round((item.count / maxMonth) * 100))}%" title="${escape(item.month)} · ${fmtNumber(item.count)}"></span>
+              `).join('')}
+            </div>
+          </section>
+        ` : ''}
+
+        <section class="dossier-section">
+          <div class="detail-section-title">Recurring territory</div>
+          <div class="dossier-territory">
+            ${(dossier.categories || []).map((item) => `<span class="chip"><span data-icon="tag"></span>${escape(item.name)} <strong>${fmtNumber(item.count)}</strong></span>`).join('')}
+            ${(dossier.domains || []).slice(0, 5).map((item) => `<span class="chip"><span data-icon="globe"></span>${escape(item.name)} <strong>${fmtNumber(item.count)}</strong></span>`).join('')}
+          </div>
+        </section>
+
+        ${(dossier.projects || []).length ? `
+          <section class="dossier-section">
+            <div class="detail-section-title">Workspaces</div>
+            <div class="dossier-projects">
+              ${dossier.projects.map((project) => `
+                <span><span data-icon="folder-kanban"></span><strong>${escape(project.name)}</strong><small>${escape(project.kind)} · ${fmtNumber(project.count)} signals</small></span>
+              `).join('')}
+            </div>
+          </section>
+        ` : ''}
+
+        <section class="dossier-section">
+          <div class="detail-section-title">Extracted claims</div>
+          <div class="dossier-claims">
+            ${(dossier.claims || []).length ? dossier.claims.slice(0, 10).map((claim) => `
+              <button data-dossier-bookmark="${escape(claim.bookmarkId)}">
+                <span>${escape(claim.text)}</span>
+                <small>${escape(fmtDate(claim.capturedAt))}${claim.freshUntil && new Date(claim.freshUntil) < new Date() ? ' · recheck' : ''}</small>
+              </button>
+            `).join('') : '<span class="placeholder">Run Brain Cycle to extract claims.</span>'}
+          </div>
+        </section>
+
+        <section class="dossier-section">
+          <div class="detail-section-title">Recent signals</div>
+          <div class="dossier-signals">
+            ${(dossier.recentSignals || []).slice(0, 10).map((signal) => `
+              <button data-dossier-bookmark="${escape(signal.id)}">
+                <span>${escape(signal.summary || String(signal.text || '').slice(0, 180))}</span>
+                <small>${escape(fmtDate(signal.bookmarkedAt || signal.postedAt))} · ${escape(signal.category || 'unclassified')}</small>
+              </button>
+            `).join('')}
+          </div>
+        </section>
+      </div>
+    `;
+    renderIcons(els.detail);
+    $('#dossier-back', els.detail).addEventListener('click', () => renderDetail(sourceBookmark));
+    $$('[data-dossier-bookmark]', els.detail).forEach((button) => {
+      button.addEventListener('click', () => select(button.dataset.dossierBookmark));
+    });
+  }
+
   function buildMarkdown(b) {
     const lines = [];
     lines.push(`## ${b.authorName || b.authorHandle || 'Bookmark'}`);
@@ -974,8 +1435,13 @@ export function LibraryView(root) {
   $$('.segment-btn', els.displayMode).forEach((btn) => {
     btn.addEventListener('click', () => setDisplayMode(btn.dataset.mode));
   });
+  $$('.segment-btn', els.section).forEach((btn) => {
+    btn.addEventListener('click', () => setSection(btn.dataset.section));
+  });
+  els.todayRefresh.addEventListener('click', () => load(false, true));
   els.clear.addEventListener('click', clearAll);
   $('#lib-inbox', root).addEventListener('click', () => {
+    setSection('archive', { load: false });
     state.inbox = !state.inbox;
     $('#lib-inbox', root).classList.toggle('btn-on', state.inbox);
     if (state.inbox) setDisplayMode('triage');
@@ -1039,8 +1505,8 @@ export function LibraryView(root) {
     },
     focusSearch() { els.search.focus(); els.search.select(); },
     applyFilter(patch) {
-      if (patch.q !== undefined) els.search.value = patch.q || '';
       setFilter(patch);
+      if (patch.q !== undefined) els.search.value = patch.q || '';
     },
     refresh() { load(); loadFacets(); },
   };

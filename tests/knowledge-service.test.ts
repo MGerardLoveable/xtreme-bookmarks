@@ -101,6 +101,49 @@ test('saved concepts participate in unified evidence retrieval', async () => {
   });
 });
 
+test('workspace-scoped retrieval excludes global concepts and unrelated artifacts', async () => {
+  await withKnowledgeDb(async (dir) => {
+    const topic = await createBrainSpace({ name: 'Scoped Memory', keywords: ['memory'] });
+    const concepts = path.join(dir, 'md', 'concepts');
+    fs.mkdirSync(concepts, { recursive: true });
+    fs.writeFileSync(
+      path.join(concepts, 'global-provenance.md'),
+      '# Global provenance\n\nA global concept about provenance that is outside this workspace.\n',
+    );
+
+    const dbPath = twitterBookmarksIndexPath();
+    const db = await openDb(dbPath);
+    try {
+      initBrainSchema(db);
+      db.run(
+        `INSERT INTO brain_space_bookmarks (space_id, bookmark_id, source, score, added_at)
+         VALUES (?, 'bookmark-1', 'manual', 1, '2026-07-02T00:00:00Z')`,
+        [topic.id],
+      );
+      upsertBrainArtifactFromDb(db, {
+        sourceType: 'note', sourceId: 'scoped-note', spaceId: topic.id,
+        title: 'Scoped provenance', body: 'Workspace provenance stays isolated.',
+      });
+      upsertBrainArtifactFromDb(db, {
+        sourceType: 'note', sourceId: 'global-note',
+        title: 'Global provenance', body: 'Unrelated global provenance should not leak.',
+      });
+      saveDb(db, dbPath);
+    } finally {
+      db.close();
+    }
+
+    const evidence = await retrieveKnowledgeEvidence('provenance', {
+      topicId: topic.id,
+      limit: 20,
+    });
+    assert.ok(evidence.some((item) => item.provenance.sourceId === 'bookmark-1'));
+    assert.ok(evidence.some((item) => item.provenance.sourceId === 'scoped-note'));
+    assert.ok(!evidence.some((item) => item.kind === 'concept'));
+    assert.ok(!evidence.some((item) => item.provenance.sourceId === 'global-note'));
+  });
+});
+
 test('saved answers become first-class synthesis Items with evidence links', async () => {
   await withKnowledgeDb(async () => {
     const db = await openDb(twitterBookmarksIndexPath());
@@ -116,6 +159,43 @@ test('saved answers become first-class synthesis Items with evidence links', asy
       assert.equal(synthesis.title, 'How should agent memory work?');
       assert.equal(synthesis.provenance.sourceType, 'synthesis');
       assert.ok(listKnowledgeItemsFromDb(db).some((item) => item.id === synthesis.id));
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test('saving synthesis rejects missing or archived Topics without orphaning knowledge', async () => {
+  await withKnowledgeDb(async () => {
+    const archived = await createBrainSpace({ name: 'Archived research' });
+    const db = await openDb(twitterBookmarksIndexPath());
+    try {
+      initBrainSchema(db);
+      db.run(`UPDATE brain_spaces SET status = 'archived' WHERE id = ?`, [archived.id]);
+      const count = (table: string) =>
+        Number(db.exec(`SELECT COUNT(*) FROM ${table}`)[0]?.values[0]?.[0] ?? 0);
+      const before = {
+        artifacts: count('brain_artifacts'),
+        edges: count('brain_edges'),
+        claims: count('brain_claims'),
+      };
+
+      for (const topicId of ['missing-workspace', archived.id]) {
+        assert.throws(
+          () => saveSynthesisFromDb(db, {
+            question: 'Should this be saved?',
+            answer: 'No orphaned workspace references should be created.',
+            topicId,
+          }),
+          /Topic not found:/,
+        );
+      }
+
+      assert.deepEqual({
+        artifacts: count('brain_artifacts'),
+        edges: count('brain_edges'),
+        claims: count('brain_claims'),
+      }, before);
     } finally {
       db.close();
     }

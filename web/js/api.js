@@ -107,6 +107,64 @@ export const api = {
     if (topicId) params.set('topicId', topicId);
     return req(`/api/evidence?${params.toString()}`);
   },
+  today(limit = 7, refresh = false, options = {}) {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (refresh) q.set('refresh', 'true');
+    return req(`/api/today?${q.toString()}`, { signal: options.signal });
+  },
+  todayAction(id, action, snoozedUntil = null) {
+    return req(`/api/today/${encodeURIComponent(id)}/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, snoozedUntil }),
+    });
+  },
+  activation(id) {
+    return req(`/api/bookmarks/${encodeURIComponent(id)}/activation`);
+  },
+  saveActivation(id, payload) {
+    return req(`/api/bookmarks/${encodeURIComponent(id)}/activation`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+  recordEvent(id, type, metadata = {}) {
+    return req(`/api/bookmarks/${encodeURIComponent(id)}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, metadata }),
+    });
+  },
+  addBookmarkProject(bookmarkId, spaceId, role = 'evidence') {
+    return req(`/api/bookmarks/${encodeURIComponent(bookmarkId)}/projects/${encodeURIComponent(spaceId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    });
+  },
+  removeBookmarkProject(bookmarkId, spaceId) {
+    return req(`/api/bookmarks/${encodeURIComponent(bookmarkId)}/projects/${encodeURIComponent(spaceId)}`, {
+      method: 'DELETE',
+    });
+  },
+  dossier(author) {
+    return req(`/api/dossiers?author=${encodeURIComponent(author)}`);
+  },
+  contextPack(payload) {
+    return req('/api/context-packs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
+  makeArtifact(payload) {
+    return req('/api/make', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
 
   // Brain
   brainMemory() { return req('/api/brain/memory'); },
@@ -115,6 +173,14 @@ export const api = {
   brainConsolidate() { return req('/api/brain/consolidate', { method: 'POST' }); },
   brainHealth() { return req('/api/brain/health', { method: 'POST' }); },
   brainDashboard() { return req('/api/brain/dashboard'); },
+  brainCycle() { return req('/api/brain/cycle'); },
+  runBrainCycle(budget = 75, options = {}) {
+    return req('/api/brain/cycle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ budget, ...options }),
+    });
+  },
   brainEngine() { return req('/api/brain/engine'); },
   brainSpaces() { return req('/api/brain/spaces'); },
   createBrainSpace(payload) {

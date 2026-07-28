@@ -535,6 +535,7 @@ function boot() {
     closeSettings();
     switchView(detail.view || 'library');
     if (detail.filter && views.library?.applyFilter) views.library.applyFilter(detail.filter);
+    if (detail.ask && views.ask?.prefill) views.ask.prefill(detail.ask);
   });
 
 

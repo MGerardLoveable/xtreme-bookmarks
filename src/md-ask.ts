@@ -161,12 +161,13 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   const engine = await resolveEngine({ nonInteractive: options.nonInteractive });
 
   // ── L1: index ───────────────────────────────────────────────────────────
-  progress('Reading index...');
+  const workspaceScoped = Boolean(options.topicId);
+  progress(workspaceScoped ? 'Using workspace scope...' : 'Reading index...');
   let indexContent = '';
   const indexPath = mdIndexPath();
-  if (await pathExists(indexPath)) {
+  if (!workspaceScoped && await pathExists(indexPath)) {
     indexContent = await readMd(indexPath);
-  } else {
+  } else if (!workspaceScoped) {
     progress('  Warning: index not found. Run xb md first.');
   }
 
@@ -175,7 +176,7 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   const pagesRead: string[] = [];
   let mdContext = indexContent ? `### Index\n${indexContent}\n\n` : '';
 
-  if (await pathExists(mdDir())) {
+  if (!workspaceScoped && await pathExists(mdDir())) {
     const relevantPaths = await selectRelevantPages(question);
     for (const absPath of relevantPaths) {
       try {
@@ -192,15 +193,18 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   const evidence = await retrieveKnowledgeEvidence(question, {
     limit: 30,
     topicId: options.topicId,
-    includeConcepts: true,
+    includeConcepts: !workspaceScoped,
   });
-  mdContext += formatConversation(options.conversation);
+  const scopedConversation = workspaceScoped
+    ? options.conversation?.filter((turn) => turn.role === 'user')
+    : options.conversation;
+  mdContext += formatConversation(scopedConversation);
   mdContext += formatEvidence(evidence);
 
   // ── L3: raw FTS5 bookmark results ───────────────────────────────────────
   progress('Searching bookmarks...');
   const ftsQuery = toFtsQuery(question);
-  const rawResults = ftsQuery
+  const rawResults = ftsQuery && !workspaceScoped
     ? await searchBookmarks({ query: ftsQuery, limit: MAX_RAW_BOOKMARKS })
     : [];
   const rawBookmarks: MdBookmark[] = rawResults.map((r) => ({
