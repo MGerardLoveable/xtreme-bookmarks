@@ -255,6 +255,41 @@ test('invokeEngineAsync: calls Grok through xAI responses API', async () => {
   }
 });
 
+test('Grok CLI uses a bounded research-only invocation', async () => {
+  const { grokHeadlessArgsForTest } = await import('../src/engine.js');
+  const args = grokHeadlessArgsForTest('/tmp/question.txt');
+
+  assert.deepEqual(args.slice(0, 2), ['--prompt-file', '/tmp/question.txt']);
+  assert.ok(args.includes('--no-subagents'));
+  assert.ok(args.includes('--disable-web-search'));
+  assert.ok(args.includes('--no-memory'));
+  assert.ok(args.includes('--no-plan'));
+  assert.equal(args[args.indexOf('--max-turns') + 1], '1');
+  assert.equal(args[args.indexOf('--output-format') + 1], 'plain');
+});
+
+test('invokeEngineAsync: aborts a running model process', async () => {
+  const { invokeEngineAsync } = await import('../src/engine.js');
+  const controller = new AbortController();
+  const engine = {
+    name: 'slow-test',
+    config: {
+      bin: process.execPath,
+      args: () => ['-e', 'setInterval(() => {}, 1000)'],
+    },
+  };
+
+  const startedAt = Date.now();
+  const pending = invokeEngineAsync(engine, 'wait', {
+    timeout: 10_000,
+    signal: controller.signal,
+  });
+  setTimeout(() => controller.abort(), 30);
+
+  await assert.rejects(pending, (err: Error) => err.name === 'AbortError');
+  assert.ok(Date.now() - startedAt < 2_000, 'aborted process should settle promptly');
+});
+
 // ── ft model CLI parsing ───────────────────────────────────────────────
 
 test('ft model: command is registered and shows help', async () => {

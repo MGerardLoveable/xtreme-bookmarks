@@ -2631,13 +2631,22 @@ async function handleApi(
     }
 
     if (req.method === 'POST' && pathname === '/api/ask') {
+      const askController = new AbortController();
+      let responseFinished = false;
+      const abortAsk = () => {
+        if (!responseFinished) askController.abort();
+      };
+      req.on('aborted', abortAsk);
+      res.on('close', abortAsk);
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
       });
-      const send = (event: string, data: unknown) =>
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const send = (event: string, data: unknown) => {
+        if (res.destroyed || res.writableEnded) return false;
+        return res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
       try {
         const body = JSON.parse(await parseBody(req)) as {
           question?: string;
@@ -2682,6 +2691,7 @@ async function handleApi(
           topicId: scopedTopicId,
           conversation,
           onProgress: (msg) => send('status', { message: msg }),
+          signal: askController.signal,
         });
         for (const evidence of result.evidence.slice(0, 8)) {
           const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [evidence.itemId]);
@@ -2695,9 +2705,15 @@ async function handleApi(
         if (result.evidence.length || body.save) saveDb(db, dbPath);
         send('done', result);
       } catch (err) {
-        send('error', { message: (err as Error).message });
+        const error = err as Error;
+        if (error.name !== 'AbortError' || (!res.destroyed && !res.writableEnded)) {
+          send('error', { message: error.message });
+        }
       } finally {
-        res.end();
+        responseFinished = true;
+        req.off('aborted', abortAsk);
+        res.off('close', abortAsk);
+        if (!res.writableEnded && !res.destroyed) res.end();
       }
       return;
     }

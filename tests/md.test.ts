@@ -82,7 +82,11 @@ test('logEntry: produces grep-friendly ## [date] format', () => {
 });
 
 // ── md-ask: extractWikiUpdates / stripWikiUpdatesSection ────────────────
-import { extractWikiUpdatesForTest, stripWikiUpdatesSectionForTest } from '../src/md-ask.js';
+import {
+  buildLocalEvidenceAnswerForTest,
+  extractWikiUpdatesForTest,
+  stripWikiUpdatesSectionForTest,
+} from '../src/md-ask.js';
 
 test('extractWikiUpdates: parses bullet list from ## Wiki Updates section', () => {
   const answer = `Some answer text.
@@ -116,6 +120,32 @@ test('stripWikiUpdatesSection: removes ## Wiki Updates and everything after', ()
 
 test('stripWikiUpdatesSection: leaves answer unchanged when no section', () => {
   assert.equal(stripWikiUpdatesSectionForTest('Just an answer.'), 'Just an answer.');
+});
+
+test('local evidence fallback returns a useful source-only answer', () => {
+  const answer = buildLocalEvidenceAnswerForTest(
+    'What have I saved about agent memory?',
+    [{
+      id: 'evidence-1',
+      itemId: 'bookmark-1',
+      kind: 'bookmark',
+      title: 'Persistent memory for coding agents',
+      excerpt: 'A local memory layer lets coding agents resume work with project context.',
+      url: 'https://example.com/agent-memory',
+      score: 0.9,
+      provenance: {
+        sourceType: 'bookmark',
+        sourceId: 'bookmark-1',
+        sourceLabel: '@researcher',
+      },
+    }],
+    [],
+  );
+
+  assert.match(answer, /source-only answer/i);
+  assert.match(answer, /Persistent memory for coding agents/);
+  assert.match(answer, /https:\/\/example\.com\/agent-memory/);
+  assert.match(answer, /retrieval summary, not a model synthesis/i);
 });
 
 // ── md-ask: scorePageName ───────────────────────────────────────────────

@@ -25,6 +25,7 @@ import type { KnowledgeConversationTurn, KnowledgeEvidence, KnowledgeItem } from
 
 const MAX_WIKI_PAGES    = 5;
 const MAX_RAW_BOOKMARKS = 20;
+const ASK_MODEL_TIMEOUT_MS = 75_000;
 
 // Common English stopwords stripped before FTS5 search — reduces noise and
 // avoids trivial matches that drown out meaningful terms.
@@ -62,6 +63,8 @@ export interface AskOptions {
   conversation?: KnowledgeConversationTurn[];
   /** Optional Topic scope for Brain artifacts and saved synthesis membership. */
   topicId?: string | null;
+  /** Cancels retrieval and any in-flight model process when the caller disconnects. */
+  signal?: AbortSignal;
 }
 
 export interface AskResult {
@@ -155,10 +158,73 @@ function stripWikiUpdatesSection(answer: string): string {
   return answer.replace(/\n## Wiki Updates[\s\S]*$/, '').trim();
 }
 
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Ask request cancelled.');
+  error.name = 'AbortError';
+  throw error;
+}
+
+function oneLine(value: string, maxLength = 360): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function buildLocalEvidenceAnswer(
+  question: string,
+  evidence: KnowledgeEvidence[],
+  rawBookmarks: MdBookmark[],
+): string {
+  const heading = [
+    'The language model did not finish, so Xtreme Bookmarks built this source-only answer from your local library instead.',
+    '',
+    `Question: ${oneLine(question, 240)}`,
+    '',
+  ];
+
+  if (evidence.length > 0) {
+    const sources = evidence.slice(0, 8).flatMap((item, index) => {
+      const author = item.provenance.sourceLabel ? ` — ${oneLine(item.provenance.sourceLabel, 80)}` : '';
+      const url = item.url ? [`  ${item.url}`] : [];
+      return [
+        `${index + 1}. ${oneLine(item.title || item.kind, 140)}${author}`,
+        `   ${oneLine(item.excerpt || 'No excerpt available.')}`,
+        ...url,
+      ];
+    });
+    return [
+      ...heading,
+      'Most relevant saved evidence:',
+      ...sources,
+      '',
+      'This is a retrieval summary, not a model synthesis. Refine the question with a topic, author, tool, or date range for a tighter evidence set.',
+    ].join('\n');
+  }
+
+  if (rawBookmarks.length > 0) {
+    const sources = rawBookmarks.slice(0, 8).flatMap((bookmark, index) => [
+      `${index + 1}. ${bookmark.authorHandle ? `@${bookmark.authorHandle.replace(/^@/, '')}: ` : ''}${oneLine(bookmark.text || 'Saved bookmark')}`,
+      `   ${bookmark.url}`,
+    ]);
+    return [
+      ...heading,
+      'Most relevant bookmarks:',
+      ...sources,
+      '',
+      'This is a retrieval summary, not a model synthesis. Refine the question with a topic, author, tool, or date range for a tighter evidence set.',
+    ].join('\n');
+  }
+
+  return [
+    ...heading,
+    'No matching notes or bookmarks were found.',
+    '',
+    'Try a shorter query with the exact author, product, company, or topic name you remember.',
+  ].join('\n');
+}
+
 export async function askMd(question: string, options: AskOptions = {}): Promise<AskResult> {
   const progress = options.onProgress ?? ((s: string) => fs.writeSync(2, s + '\n'));
-
-  const engine = await resolveEngine({ nonInteractive: options.nonInteractive });
+  throwIfCancelled(options.signal);
 
   // ── L1: index ───────────────────────────────────────────────────────────
   const workspaceScoped = Boolean(options.topicId);
@@ -200,6 +266,7 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
     : options.conversation;
   mdContext += formatConversation(scopedConversation);
   mdContext += formatEvidence(evidence);
+  throwIfCancelled(options.signal);
 
   // ── L3: raw FTS5 bookmark results ───────────────────────────────────────
   progress('Searching bookmarks...');
@@ -217,7 +284,23 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   // ── LLM call ────────────────────────────────────────────────────────────
   progress('Invoking LLM...');
   const prompt     = buildAskPrompt(question, mdContext, rawBookmarks);
-  const rawAnswer  = await invokeEngineAsync(engine, prompt, { timeout: 180_000, maxBuffer: 1024 * 1024 * 4 });
+  let engineName = 'local-evidence';
+  let rawAnswer: string;
+  try {
+    const engine = await resolveEngine({ nonInteractive: options.nonInteractive });
+    engineName = engine.name;
+    rawAnswer = await invokeEngineAsync(engine, prompt, {
+      timeout: ASK_MODEL_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024 * 4,
+      signal: options.signal,
+    });
+    if (!rawAnswer.trim()) throw new Error(`${engine.name} returned an empty answer.`);
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    progress('Model unavailable. Building an answer from local evidence...');
+    rawAnswer = buildLocalEvidenceAnswer(question, evidence, rawBookmarks);
+    engineName = 'local-evidence';
+  }
   const wikiUpdates = extractWikiUpdates(rawAnswer);
   const answer      = stripWikiUpdatesSection(rawAnswer);
 
@@ -257,7 +340,7 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   const savedNote = savedAs ? ` saved=${path.basename(savedAs)}` : '';
   await appendLine(
     mdLogPath(),
-    logEntry('ask', `engine=${engine.name} pages_read=${pagesRead.length} raw=${rawBookmarks.length}${savedNote}`),
+    logEntry('ask', `engine=${engineName} pages_read=${pagesRead.length} raw=${rawBookmarks.length}${savedNote}`),
   );
 
   if (wikiUpdates.length > 0) {
@@ -266,7 +349,7 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
     }
   }
 
-  return { answer, pagesRead, savedAs, wikiUpdates, engine: engine.name, evidence, savedArtifact };
+  return { answer, pagesRead, savedAs, wikiUpdates, engine: engineName, evidence, savedArtifact };
 }
 
 // ── Test exports ─────────────────────────────────────────────────────────
@@ -275,3 +358,4 @@ export const stripWikiUpdatesSectionForTest = stripWikiUpdatesSection;
 export const scorePageNameForTest = scorePageName;
 export const formatConversationForTest = formatConversation;
 export const formatEvidenceForTest = formatEvidence;
+export const buildLocalEvidenceAnswerForTest = buildLocalEvidenceAnswer;

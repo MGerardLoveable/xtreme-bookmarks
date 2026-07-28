@@ -227,13 +227,45 @@ export async function resolveEngine(options: ResolveEngineOptions = {}): Promise
 export interface InvokeOptions {
   timeout?: number;
   maxBuffer?: number;
+  signal?: AbortSignal;
+}
+
+const GROK_RESEARCH_SYSTEM_PROMPT = [
+  'You are a focused research Q&A engine.',
+  'Answer only from the material supplied in the prompt.',
+  'Do not inspect or modify files, execute commands, browse the web, make plans, delegate work, or ask follow-up questions.',
+  'Return the final answer directly.',
+].join(' ');
+
+function createAbortError(message = 'Model request cancelled.'): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function grokHeadlessArgs(promptPath: string): string[] {
+  return [
+    '--prompt-file', promptPath,
+    '--max-turns', '1',
+    '--no-subagents',
+    '--disable-web-search',
+    '--no-memory',
+    '--no-plan',
+    '--verbatim',
+    '--output-format', 'plain',
+    '--system-prompt-override', GROK_RESEARCH_SYSTEM_PROMPT,
+  ];
 }
 
 function grokWslPromptScript(): string {
   return [
     'tmp=$(mktemp)',
     'cat > "$tmp"',
-    'grok --prompt-file "$tmp"',
+    `grok --prompt-file "$tmp" --max-turns 1 --no-subagents --disable-web-search --no-memory --no-plan --verbatim --output-format plain --system-prompt-override '${GROK_RESEARCH_SYSTEM_PROMPT}'`,
     'code=$?',
     'rm -f "$tmp"',
     'exit $code',
@@ -241,6 +273,7 @@ function grokWslPromptScript(): string {
 }
 
 function invokeGrokCliSync(prompt: string, opts: InvokeOptions = {}): string {
+  throwIfAborted(opts.signal);
   const status = getGrokOauthStatus();
   if (!status.cliInstalled) throw new Error('SuperGrok is not installed. Install the xAI Grok CLI first.');
   if (!status.loggedIn) throw new Error('SuperGrok is installed but not signed in. Run: grok login --device-auth');
@@ -260,7 +293,7 @@ function invokeGrokCliSync(prompt: string, opts: InvokeOptions = {}): string {
   const promptPath = path.join(tmpDir, 'prompt.txt');
   try {
     fs.writeFileSync(promptPath, prompt, 'utf-8');
-    return execFileSync('grok', ['--prompt-file', promptPath], {
+    return execFileSync('grok', grokHeadlessArgs(promptPath), {
       encoding: 'utf-8',
       timeout: opts.timeout ?? 120_000,
       maxBuffer: opts.maxBuffer ?? 1024 * 1024,
@@ -284,7 +317,7 @@ function invokeGrokCli(prompt: string, opts: InvokeOptions = {}): Promise<string
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xb-grok-'));
   const promptPath = path.join(tmpDir, 'prompt.txt');
   fs.writeFileSync(promptPath, prompt, 'utf-8');
-  return spawnToString('grok', ['--prompt-file', promptPath], undefined, opts)
+  return spawnToString('grok', grokHeadlessArgs(promptPath), undefined, opts)
     .finally(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 }
 
@@ -293,8 +326,16 @@ async function invokeGrokApi(prompt: string, opts: InvokeOptions = {}): Promise<
   const apiKey = process.env.XAI_API_KEY;
   if (!apiKey) throw new Error('Grok API is not configured. Set XAI_API_KEY in .env.local or your shell.');
 
+  throwIfAborted(opts.signal);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeout ?? 120_000);
+  const timeoutMs = opts.timeout ?? 120_000;
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
     const res = await fetch('https://api.x.ai/v1/responses', {
       method: 'POST',
@@ -329,10 +370,14 @@ async function invokeGrokApi(prompt: string, opts: InvokeOptions = {}): Promise<
     if (outputText.length > maxBuffer) throw new Error(`grok exceeded ${maxBuffer} bytes of output`);
     return outputText.trim();
   } catch (err) {
-    if ((err as Error).name === 'AbortError') throw new Error(`grok timed out after ${opts.timeout ?? 120_000}ms`);
+    if ((err as Error).name === 'AbortError') {
+      if (opts.signal?.aborted) throw createAbortError();
+      if (timedOut) throw new Error(`grok timed out after ${timeoutMs}ms`);
+    }
     throw err;
   } finally {
     clearTimeout(timeout);
+    opts.signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -380,6 +425,7 @@ export function invokeEngine(engine: ResolvedEngine, prompt: string, opts: Invok
 function spawnToString(bin: string, args: string[], stdinText: string | undefined, opts: InvokeOptions = {}): Promise<string> {
   const timeout = opts.timeout ?? 120_000;
   const maxBuffer = opts.maxBuffer ?? 1024 * 1024;
+  if (opts.signal?.aborted) return Promise.reject(createAbortError());
 
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
@@ -389,13 +435,45 @@ function spawnToString(bin: string, args: string[], stdinText: string | undefine
 
     let stdout = '';
     let stderr = '';
-    let killedForSize = false;
-    let killedForTimeout = false;
+    let stopReason: 'abort' | 'timeout' | 'size' | null = null;
+    let settled = false;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    let hardStopTimer: NodeJS.Timeout | undefined;
 
-    const timer = setTimeout(() => {
-      killedForTimeout = true;
+    const errorForStopReason = (): Error => {
+      if (stopReason === 'abort') return createAbortError();
+      if (stopReason === 'timeout') return new Error(`${bin} timed out after ${timeout}ms`);
+      return new Error(`${bin} exceeded ${maxBuffer} bytes of stdout`);
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (hardStopTimer) clearTimeout(hardStopTimer);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(stdout.trim());
+    };
+
+    const stop = (reason: NonNullable<typeof stopReason>) => {
+      if (settled || stopReason) return;
+      stopReason = reason;
       child.kill('SIGTERM');
-    }, timeout);
+      forceKillTimer = setTimeout(() => {
+        if (!settled) child.kill('SIGKILL');
+      }, 1_000);
+      hardStopTimer = setTimeout(() => finish(errorForStopReason()), 3_000);
+    };
+
+    const onAbort = () => stop('abort');
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => stop('timeout'), timeout);
 
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
@@ -403,26 +481,24 @@ function spawnToString(bin: string, args: string[], stdinText: string | undefine
     child.stdout.on('data', (chunk: string) => {
       stdout += chunk;
       if (stdout.length > maxBuffer) {
-        killedForSize = true;
-        child.kill('SIGTERM');
+        stop('size');
       }
     });
-    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.stderr.on('data', (chunk: string) => {
+      stderr = (stderr + chunk).slice(-maxBuffer);
+    });
 
     child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
+      finish(err);
     });
 
     child.on('close', (code) => {
-      clearTimeout(timer);
-      if (killedForTimeout) return reject(new Error(`${bin} timed out after ${timeout}ms`));
-      if (killedForSize) return reject(new Error(`${bin} exceeded ${maxBuffer} bytes of stdout`));
+      if (stopReason) return finish(errorForStopReason());
       if (code !== 0) {
         const tail = stderr.trim().split('\n').slice(-5).join('\n');
-        return reject(new Error(`${bin} exited with code ${code}${tail ? `:\n${tail}` : ''}`));
+        return finish(new Error(`${bin} exited with code ${code}${tail ? `:\n${tail}` : ''}`));
       }
-      resolve(stdout.trim());
+      finish();
     });
 
     if (child.stdin) child.stdin.end(stdinText ?? '');
@@ -443,3 +519,5 @@ export function invokeEngineAsync(engine: ResolvedEngine, prompt: string, opts: 
   if (!bin || !args) return Promise.reject(new Error(`Engine "${engine.name}" cannot be invoked.`));
   return spawnToString(bin, args(prompt), input ? input(prompt) : undefined, opts);
 }
+
+export const grokHeadlessArgsForTest = grokHeadlessArgs;

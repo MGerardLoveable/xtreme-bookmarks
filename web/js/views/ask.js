@@ -333,7 +333,14 @@ export function AskView(root) {
   // Streaming SSE fetch
   async function streamAsk(question, save, scope, turn) {
     askController?.abort();
-    askController = new AbortController();
+    const controller = new AbortController();
+    askController = controller;
+    let completed = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 90_000);
     const topicId = scope?.startsWith('topic:') ? scope.slice('topic:'.length) : null;
     const priorTurns = conversation
       .filter((entry) => entry !== turn && entry.answer)
@@ -342,54 +349,68 @@ export function AskView(root) {
         { role: 'user', content: entry.question },
         { role: 'assistant', content: entry.answer },
       ]);
-    const res = await fetch('/api/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, save, scope, topicId, conversation: priorTurns }),
-      signal: askController.signal,
-    });
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    try {
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, save, scope, topicId, conversation: priorTurns }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const parts = buf.split('\n\n');
-      buf = parts.pop() || '';
-      for (const part of parts) {
-        let event = 'message';
-        let data = '';
-        for (const line of part.split('\n')) {
-          if (line.startsWith('event:')) event = line.slice(6).trim();
-          else if (line.startsWith('data:')) data += line.slice(5).trim();
-        }
-        let parsed;
-        try { parsed = JSON.parse(data); } catch { parsed = { message: data }; }
-        if (event === 'status') {
-          turn.status = parsed.message || '';
-          renderConversation(conversation);
-        } else if (event === 'done') {
-          turn.pending = false;
-          turn.status = '';
-          turn.answer = parsed.answer || '';
-          turn.pagesRead = parsed.pagesRead || [];
-          turn.wikiUpdates = parsed.wikiUpdates || [];
-          turn.savedAs = parsed.savedAs;
-          turn.engine = parsed.engine;
-          turn.evidence = parsed.evidence || [];
-          turn.savedArtifact = parsed.savedArtifact || null;
-          renderConversation(conversation);
-        } else if (event === 'error') {
-          turn.pending = false;
-          turn.status = '';
-          turn.answer = `⚠︎ ${parsed.message || 'Unknown error'}`;
-          renderConversation(conversation);
-          throw new Error(parsed.message || 'Ask failed');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const part of parts) {
+          let event = 'message';
+          let data = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          let parsed;
+          try { parsed = JSON.parse(data); } catch { parsed = { message: data }; }
+          if (event === 'status') {
+            turn.status = parsed.message || '';
+            renderConversation(conversation);
+          } else if (event === 'done') {
+            completed = true;
+            turn.pending = false;
+            turn.status = '';
+            turn.answer = parsed.answer || '';
+            turn.pagesRead = parsed.pagesRead || [];
+            turn.wikiUpdates = parsed.wikiUpdates || [];
+            turn.savedAs = parsed.savedAs;
+            turn.engine = parsed.engine;
+            turn.evidence = parsed.evidence || [];
+            turn.savedArtifact = parsed.savedArtifact || null;
+            renderConversation(conversation);
+            return;
+          } else if (event === 'error') {
+            completed = true;
+            turn.pending = false;
+            turn.status = '';
+            turn.answer = `⚠︎ ${parsed.message || 'Unknown error'}`;
+            renderConversation(conversation);
+            throw new Error(parsed.message || 'Ask failed');
+          }
         }
       }
+      if (!completed) throw new Error('Ask stopped before an answer was returned. Please try again.');
+    } catch (err) {
+      if (timedOut && err.name === 'AbortError') {
+        throw new Error('Ask timed out before an answer was returned. Please try again.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+      if (askController === controller) askController = null;
     }
   }
 
@@ -413,7 +434,14 @@ export function AskView(root) {
       saveHistory(history);
       renderHistory();
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      turn.pending = false;
+      turn.status = '';
+      if (err.name === 'AbortError') {
+        renderConversation(conversation);
+        return;
+      }
+      if (!turn.answer) turn.answer = `⚠︎ ${err.message || 'Ask failed'}`;
+      renderConversation(conversation);
       toast(`Ask failed: ${err.message}`);
     } finally {
       els.send.disabled = false;
