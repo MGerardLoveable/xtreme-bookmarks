@@ -5,8 +5,9 @@
 
 import { api } from '../api.js';
 import { renderIcons } from '../icons.js';
-import { $, $$, el, escape, debounce, toast, copy, linkify } from '../util.js';
+import { $, $$, escape, toast, copy } from '../util.js';
 import { openWiki } from '../wiki.js';
+import { renderAskDocument } from '../ask-results.js';
 
 const SUGGESTIONS = [
   'What are the most interesting patterns in my bookmarks this month?',
@@ -192,6 +193,10 @@ export function AskView(root) {
     $$('.ask-source', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
       openWiki(btn.dataset.page);
     }));
+    $$('[data-wiki]', els.transcript).forEach((link) => link.addEventListener('click', (event) => {
+      event.preventDefault();
+      openWiki(link.dataset.wiki);
+    }));
     $$('[data-ask-evidence]', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
       const item = convo.flatMap((turn) => turn.evidence || []).find((entry) => entry.itemId === btn.dataset.askEvidence);
       if (!item) return;
@@ -238,8 +243,13 @@ export function AskView(root) {
       <div class="ask-status"><div class="spinner"></div><span>${escape(turn.status || 'Thinking…')}</span></div>
     ` : '';
 
+    const isError = String(turn.answer || '').startsWith('⚠︎');
     const answerBlock = turn.answer ? `
-      <div class="ask-answer">${linkify(turn.answer)}</div>
+      <div class="ask-answer${isError ? ' ask-answer-error' : ''}">
+        ${isError
+          ? escape(turn.answer)
+          : renderAskDocument(turn.answer, { prefix: `ask-${idx}`, fallbackTitle: turn.question })}
+      </div>
     ` : '';
 
     const sources = (turn.pagesRead && turn.pagesRead.length) ? `
@@ -250,8 +260,11 @@ export function AskView(root) {
     ` : '';
 
     const evidence = (turn.evidence && turn.evidence.length) ? `
-      <div class="ask-evidence">
-        <div class="detail-section-title">Evidence</div>
+      <details class="ask-evidence">
+        <summary>
+          <span><span data-icon="library"></span>Evidence trail</span>
+          <small>${Math.min(10, turn.evidence.length)} shown · ${turn.evidence.length} matched</small>
+        </summary>
         <div class="ask-evidence-list">
           ${turn.evidence.slice(0, 10).map((item, evidenceIndex) => {
             const safeUrl = safeExternalUrl(item.url);
@@ -264,27 +277,39 @@ export function AskView(root) {
           `;
           }).join('')}
         </div>
-      </div>
+      </details>
     ` : '';
 
     const updates = (turn.wikiUpdates && turn.wikiUpdates.length) ? `
-      <div class="detail-section-title" style="margin-top:12px">Suggested wiki updates</div>
-      <ul style="font-size:12px;color:var(--fg-2);padding-left:18px;display:grid;gap:4px">
-        ${turn.wikiUpdates.map((u) => `<li>${escape(u)}</li>`).join('')}
-      </ul>
+      <details class="ask-wiki-updates">
+        <summary>
+          <span><span data-icon="brain-circuit"></span>Knowledge base updates</span>
+          <small>${turn.wikiUpdates.length} suggestion${turn.wikiUpdates.length === 1 ? '' : 's'}</small>
+        </summary>
+        <ul>${turn.wikiUpdates.map((u) => `<li>${escape(u)}</li>`).join('')}</ul>
+      </details>
     ` : '';
 
     const makeBar = turn.answer ? `
       <div class="ask-make">
-        <span>Make</span>
-        ${[
-          ['brief', 'Brief'],
-          ['checklist', 'Checklist'],
-          ['decision', 'Decision'],
-          ['experiment', 'Experiment'],
-          ['context_pack', 'Context pack'],
-          ['flashcards', 'Flashcards'],
-        ].map(([type, label]) => `<button class="btn btn-sm btn-ghost ask-make-action" data-i="${idx}" data-type="${type}">${label}</button>`).join('')}
+        <div class="ask-make-heading">
+          <span>Put this research to work</span>
+          <small>Create a reusable output from the answer and its evidence.</small>
+        </div>
+        <div class="ask-make-actions">
+          ${[
+            ['brief', 'bookmark', 'Brief'],
+            ['checklist', 'check-circle', 'Action plan'],
+            ['decision', 'target', 'Decision memo'],
+            ['experiment', 'flame', 'Experiment'],
+            ['context_pack', 'layers', 'Context pack'],
+            ['flashcards', 'library', 'Flashcards'],
+          ].map(([type, icon, label]) => `
+            <button class="btn btn-sm btn-ghost ask-make-action" data-i="${idx}" data-type="${type}">
+              <span data-icon="${icon}"></span>${label}
+            </button>
+          `).join('')}
+        </div>
       </div>
     ` : '';
 

@@ -396,10 +396,65 @@
   font-size: 9px;
 }
 
-.ask-evidence {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
+.ask-evidence,
+.ask-wiki-updates {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.ask-evidence summary,
+.ask-wiki-updates summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 46px;
+  color: var(--fg);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ask-evidence summary::-webkit-details-marker,
+.ask-wiki-updates summary::-webkit-details-marker {
+  display: none;
+}
+
+.ask-evidence summary > span,
+.ask-wiki-updates summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ask-evidence summary [data-icon],
+.ask-wiki-updates summary [data-icon] {
+  width: 14px;
+  height: 14px;
+  color: var(--desk-teal);
+}
+
+.ask-evidence summary small,
+.ask-wiki-updates summary small {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-3);
+  font: 500 9px/1.4 var(--font-mono);
+}
+
+.ask-evidence summary small::after,
+.ask-wiki-updates summary small::after {
+  content: '+';
+  color: var(--fg-2);
+  font-size: 14px;
+}
+
+.ask-evidence[open] summary small::after,
+.ask-wiki-updates[open] summary small::after {
+  content: '−';
 }
 
 .ask-evidence-list {
@@ -413,7 +468,7 @@
   display: grid;
   gap: 3px;
   width: 100%;
-  padding: 9px 44px 9px 0;
+  padding: 11px 56px 11px 8px;
   border: 0;
   border-bottom: 1px solid var(--border);
   color: var(--fg-2);
@@ -447,8 +502,8 @@
 
 .ask-evidence-list em {
   position: absolute;
-  top: 10px;
-  right: 0;
+  top: 12px;
+  right: 8px;
   color: var(--desk-teal);
   font-family: var(--font-mono);
   font-size: 8px;
@@ -456,23 +511,70 @@
   text-transform: uppercase;
 }
 
-.ask-make {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 15px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
+.ask-wiki-updates {
+  border-top: 0;
 }
 
-.ask-make > span {
-  margin-right: 3px;
+.ask-wiki-updates summary [data-icon] {
+  color: var(--desk-coral);
+}
+
+.ask-wiki-updates ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 14px 16px 30px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ask-make {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 16px 0;
+  border-top: 2px solid var(--fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.ask-make-heading {
+  display: grid;
+  gap: 3px;
+}
+
+.ask-make-heading > span {
   color: var(--desk-coral);
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
+}
+
+.ask-make-heading small {
+  max-width: 32ch;
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ask-make-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ask-make-action {
+  gap: 5px;
+}
+
+.ask-make-action [data-icon] {
+  width: 13px;
+  height: 13px;
 }
 
 .ask-made {
@@ -697,6 +799,15 @@ html[data-theme="dark"] .ask-made {
   .ask-make .btn {
     padding-right: 7px;
     padding-left: 7px;
+  }
+
+  .ask-make {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .ask-make-actions {
+    justify-content: flex-start;
   }
 
   .radar-intelligence {

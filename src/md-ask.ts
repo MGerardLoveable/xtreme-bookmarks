@@ -25,7 +25,7 @@ import type { KnowledgeConversationTurn, KnowledgeEvidence, KnowledgeItem } from
 
 const MAX_WIKI_PAGES    = 5;
 const MAX_RAW_BOOKMARKS = 20;
-const ASK_MODEL_TIMEOUT_MS = 75_000;
+const ASK_MODEL_TIMEOUT_MS = 180_000;
 
 // Common English stopwords stripped before FTS5 search — reduces noise and
 // avoids trivial matches that drown out meaningful terms.
@@ -174,51 +174,69 @@ function buildLocalEvidenceAnswer(
   evidence: KnowledgeEvidence[],
   rawBookmarks: MdBookmark[],
 ): string {
-  const heading = [
-    'The language model did not finish, so Xtreme Bookmarks built this source-only answer from your local library instead.',
-    '',
-    `Question: ${oneLine(question, 240)}`,
-    '',
-  ];
+  const title = oneLine(question, 140);
+  const localSources = evidence.length > 0
+    ? evidence.slice(0, 8).map((item) => ({
+      title: item.title || item.kind,
+      detail: item.excerpt || 'No excerpt available.',
+      label: item.provenance.sourceLabel || '',
+      url: item.url || '',
+    }))
+    : rawBookmarks.slice(0, 8).map((bookmark) => ({
+      title: bookmark.authorHandle ? `@${bookmark.authorHandle.replace(/^@/, '')}` : 'Saved bookmark',
+      detail: bookmark.text || 'No excerpt available.',
+      label: '',
+      url: bookmark.url,
+    }));
 
-  if (evidence.length > 0) {
-    const sources = evidence.slice(0, 8).flatMap((item, index) => {
-      const author = item.provenance.sourceLabel ? ` — ${oneLine(item.provenance.sourceLabel, 80)}` : '';
-      const url = item.url ? [`  ${item.url}`] : [];
+  const findings = localSources.length > 0
+    ? localSources.flatMap((item, index) => {
+      const label = item.label ? ` - ${oneLine(item.label, 80)}` : '';
+      const citation = item.url ? ` ([source](${item.url}))` : '';
       return [
-        `${index + 1}. ${oneLine(item.title || item.kind, 140)}${author}`,
-        `   ${oneLine(item.excerpt || 'No excerpt available.')}`,
-        ...url,
+        `${index + 1}. **${oneLine(item.title, 140)}**${label}`,
+        `   ${oneLine(item.detail)}${citation}`,
       ];
-    });
-    return [
-      ...heading,
-      'Most relevant saved evidence:',
-      ...sources,
-      '',
-      'This is a retrieval summary, not a model synthesis. Refine the question with a topic, author, tool, or date range for a tighter evidence set.',
-    ].join('\n');
-  }
-
-  if (rawBookmarks.length > 0) {
-    const sources = rawBookmarks.slice(0, 8).flatMap((bookmark, index) => [
-      `${index + 1}. ${bookmark.authorHandle ? `@${bookmark.authorHandle.replace(/^@/, '')}: ` : ''}${oneLine(bookmark.text || 'Saved bookmark')}`,
-      `   ${bookmark.url}`,
-    ]);
-    return [
-      ...heading,
-      'Most relevant bookmarks:',
-      ...sources,
-      '',
-      'This is a retrieval summary, not a model synthesis. Refine the question with a topic, author, tool, or date range for a tighter evidence set.',
-    ].join('\n');
-  }
+    })
+    : ['No matching notes or bookmarks were found for this question.'];
 
   return [
-    ...heading,
-    'No matching notes or bookmarks were found.',
+    `# ${title} - Local Evidence Brief`,
     '',
-    'Try a shorter query with the exact author, product, company, or topic name you remember.',
+    '## Executive Summary',
+    `- **Status:** Grok did not finish, so this brief uses only your local Xtreme Bookmarks index.`,
+    `- **Coverage:** ${localSources.length} high-ranking source${localSources.length === 1 ? '' : 's'} are included below without unsupported model synthesis.`,
+    `- **Best next move:** Review the direct matches, narrow any noisy terms, and run Ask again for a synthesized decision brief.`,
+    '',
+    '## Key Findings',
+    '### Strongest direct matches',
+    ...findings,
+    '',
+    '### What this evidence can establish',
+    localSources.length > 0
+      ? 'These sources show what you saved and which items most closely match the question. They do not, by themselves, establish consensus, causality, or whether every claim is current.'
+      : 'The current query does not have enough matching local evidence to support a useful conclusion.',
+    '',
+    '## Recommended Actions',
+    '- [ ] **Now - Review the top matches**: Open the most relevant sources and identify the two or three claims that directly answer your question.',
+    '- [ ] **Next - Tighten the query**: Add an exact author, product, date range, or outcome to reduce weak keyword matches.',
+    '- [ ] **Then - Re-run Ask**: Generate a full synthesis once the evidence set reflects the decision or project you are working on.',
+    '',
+    '## Step-by-Step Plan',
+    '1. Open the first three cited sources and discard any that only match incidental words.',
+    '2. Rewrite the question around the specific decision, comparison, or deliverable you need.',
+    '3. Re-run Ask with the narrower wording and confirm that the evidence trail contains direct matches.',
+    '4. Turn the result into an Action plan, Decision memo, or Context pack from the output bar.',
+    '',
+    '## Risks, Gaps, and Contradictions',
+    '- This is retrieval, not model synthesis; it intentionally avoids drawing conclusions that the saved text does not support.',
+    '- Keyword matches can surface adjacent or outdated material, especially when a question contains broad terms.',
+    '- Claims should be checked against their linked source before they drive a consequential decision.',
+    '',
+    '## Bottom Line',
+    localSources.length > 0
+      ? `Your library contains ${localSources.length} usable starting point${localSources.length === 1 ? '' : 's'} for "${title}", but the evidence needs a narrower question or a completed Grok synthesis before it becomes a confident recommendation.`
+      : `Your library does not yet contain a strong match for "${title}". Search with a precise author, tool, company, or phrase, or capture the missing source first.`,
   ].join('\n');
 }
 
@@ -282,13 +300,14 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   }));
 
   // ── LLM call ────────────────────────────────────────────────────────────
-  progress('Invoking LLM...');
+  progress('Preparing a decision-ready synthesis...');
   const prompt     = buildAskPrompt(question, mdContext, rawBookmarks);
   let engineName = 'local-evidence';
   let rawAnswer: string;
   try {
     const engine = await resolveEngine({ nonInteractive: options.nonInteractive });
     engineName = engine.name;
+    progress(`Synthesizing the research brief with ${engine.name}...`);
     rawAnswer = await invokeEngineAsync(engine, prompt, {
       timeout: ASK_MODEL_TIMEOUT_MS,
       maxBuffer: 1024 * 1024 * 4,
@@ -297,7 +316,10 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
     if (!rawAnswer.trim()) throw new Error(`${engine.name} returned an empty answer.`);
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
-    progress('Model unavailable. Building an answer from local evidence...');
+    const timedOut = /timed out/i.test((err as Error).message);
+    progress(timedOut
+      ? 'The model took too long. Building a structured brief from local evidence...'
+      : 'Model unavailable. Building a structured brief from local evidence...');
     rawAnswer = buildLocalEvidenceAnswer(question, evidence, rawBookmarks);
     engineName = 'local-evidence';
   }

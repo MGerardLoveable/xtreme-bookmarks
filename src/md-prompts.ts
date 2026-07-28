@@ -201,12 +201,33 @@ ${bookmarkSection}
 ## Question
 ${question}
 
-## Instructions
-1. Answer the question using the wiki pages and raw data above. Cite bookmark URLs inline.
-2. After your answer, output a section "## Wiki Updates" listing any wiki pages that should
+## Response Contract
+Write a decision-ready research brief in Markdown. Use the user's wording and intent, but
+turn the retrieved material into something they can understand, act on, and return to later.
+
+1. Start with a specific "#" title that describes the answer, not a generic title such as
+   "Research Brief".
+2. Include these "##" sections in this order:
+   - "## Executive Summary" — directly answer the question in 3-5 concise bullets.
+   - "## Key Findings" — provide in-depth analysis grouped under descriptive "###" headings.
+     Explain why each finding matters and distinguish source facts from your interpretation.
+   - "## Recommended Actions" — give practical next actions as task-list items using
+     "- [ ] **Priority — Action**: rationale and expected outcome".
+   - "## Step-by-Step Plan" — provide a numbered sequence with clear outputs or completion
+     criteria. Make it useful even if the user starts immediately.
+   - "## Risks, Gaps, and Contradictions" — identify weak evidence, conflicts, uncertainty,
+     outdated claims, or missing information. Never present speculation as established fact.
+   - "## Bottom Line" — close with the most important takeaway in one short paragraph.
+3. For a source-finding question, put the best direct matches first and explain why each is
+   relevant. For a comparison, use a compact Markdown table when it improves scanning.
+4. Cite the exact bookmark URL inline using only this format: "[source](https://...)".
+   Never nest links, wrap a URL in square brackets, or invent a URL.
+5. Prefer depth over repetition. When the evidence supports it, produce roughly 900-1,600
+   words; when evidence is thin, say so and stay concise.
+6. After the brief, output a final section "## Wiki Updates" listing any wiki pages that should
    be updated based on this question and answer. Format each as:
    - [[page-path]]: what to add or change
    This ensures your exploration compounds into the knowledge base.
 
-Now answer the question.`;
+Output only the Markdown brief. Do not add a preamble before the "#" title.`;
 }

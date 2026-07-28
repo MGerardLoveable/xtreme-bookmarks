@@ -122,7 +122,7 @@ test('stripWikiUpdatesSection: leaves answer unchanged when no section', () => {
   assert.equal(stripWikiUpdatesSectionForTest('Just an answer.'), 'Just an answer.');
 });
 
-test('local evidence fallback returns a useful source-only answer', () => {
+test('local evidence fallback returns a structured, actionable research brief', () => {
   const answer = buildLocalEvidenceAnswerForTest(
     'What have I saved about agent memory?',
     [{
@@ -142,10 +142,17 @@ test('local evidence fallback returns a useful source-only answer', () => {
     [],
   );
 
-  assert.match(answer, /source-only answer/i);
+  assert.match(answer, /^# What have I saved about agent memory\? - Local Evidence Brief/);
+  assert.match(answer, /## Executive Summary/);
+  assert.match(answer, /## Key Findings/);
+  assert.match(answer, /## Recommended Actions/);
+  assert.match(answer, /## Step-by-Step Plan/);
+  assert.match(answer, /## Risks, Gaps, and Contradictions/);
+  assert.match(answer, /## Bottom Line/);
+  assert.match(answer, /- \[ \] \*\*Now - Review the top matches\*\*/);
   assert.match(answer, /Persistent memory for coding agents/);
-  assert.match(answer, /https:\/\/example\.com\/agent-memory/);
-  assert.match(answer, /retrieval summary, not a model synthesis/i);
+  assert.match(answer, /\[source\]\(https:\/\/example\.com\/agent-memory\)/);
+  assert.match(answer, /This is retrieval, not model synthesis/i);
 });
 
 // ── md-ask: scorePageName ───────────────────────────────────────────────
@@ -164,7 +171,12 @@ test('scorePageName: hyphen-separated page names are split into words', () => {
 });
 
 // ── md-prompts: prompt structure ────────────────────────────────────────
-import { buildCategoryPagePrompt, buildDomainPagePrompt, buildEntityPagePrompt } from '../src/md-prompts.js';
+import {
+  buildAskPrompt,
+  buildCategoryPagePrompt,
+  buildDomainPagePrompt,
+  buildEntityPagePrompt,
+} from '../src/md-prompts.js';
 
 const SAMPLE_BOOKMARKS = [
   { id: '1', url: 'https://example.com', text: 'Some tool for developers', authorHandle: 'user1' },
@@ -197,6 +209,19 @@ test('buildEntityPagePrompt: includes author handle', () => {
   const p = buildEntityPagePrompt('karpathy', SAMPLE_BOOKMARKS);
   assert.ok(p.includes('@karpathy'));
   assert.ok(p.includes('Recurring Topics'));
+});
+
+test('buildAskPrompt: requests a complete decision-ready research brief', () => {
+  const prompt = buildAskPrompt('How should I use agent orchestration?', '', SAMPLE_BOOKMARKS);
+
+  assert.match(prompt, /## Executive Summary/);
+  assert.match(prompt, /## Key Findings/);
+  assert.match(prompt, /## Recommended Actions/);
+  assert.match(prompt, /## Step-by-Step Plan/);
+  assert.match(prompt, /## Risks, Gaps, and Contradictions/);
+  assert.match(prompt, /## Bottom Line/);
+  assert.match(prompt, /Never nest links/);
+  assert.match(prompt, /900-1,600\s+words/);
 });
 
 test('buildCategoryPagePrompt: does not reference Obsidian', () => {
