@@ -12,8 +12,11 @@ function escapeHtml(value) {
 
 const SECTION_TYPES = [
   { kind: 'summary', pattern: /summary|overview|direct answer|answer first/i, icon: 'target', label: 'Summary' },
+  { kind: 'success', pattern: /success criteria|definition of done|measures? of success/i, icon: 'check-circle-2', label: 'Success' },
   { kind: 'actions', pattern: /action|recommend|next move|what to do/i, icon: 'check-circle', label: 'Actions' },
+  { kind: 'quickstart', pattern: /first \d+ minutes|start here|immediate next/i, icon: 'clock-3', label: 'Start now' },
   { kind: 'steps', pattern: /step|plan|roadmap|implementation|workflow/i, icon: 'layers', label: 'Plan' },
+  { kind: 'decisions', pattern: /decision|tradeoff/i, icon: 'sliders-horizontal', label: 'Tradeoffs' },
   { kind: 'risks', pattern: /risk|gap|caveat|contradiction|uncertaint|limitation/i, icon: 'shield-check', label: 'Caveats' },
   { kind: 'conclusion', pattern: /bottom line|conclusion|takeaway/i, icon: 'sparkles', label: 'Bottom line' },
   { kind: 'sources', pattern: /source|evidence|reference/i, icon: 'library', label: 'Sources' },
@@ -137,6 +140,8 @@ export function parseAskDocument(value, fallbackTitle = 'Research answer', citat
 export function renderAskDocument(value, options = {}) {
   const prefix = slug(options.prefix || 'ask-result');
   const document = parseAskDocument(value, options.fallbackTitle, options.citationLabels);
+  const variant = options.variant ? slug(options.variant) : '';
+  const kicker = String(options.kicker || 'Research brief');
   const sectionIds = new Map();
 
   const sections = document.sections.map((section, index) => {
@@ -158,18 +163,18 @@ export function renderAskDocument(value, options = {}) {
   const navigation = sections.length > 1 ? `
     <nav class="ask-report-nav" aria-label="Answer sections">
       ${sections.map((section) => `
-        <a href="#${section.id}" title="Jump to ${escapeHtml(section.title)}">
+        <button type="button" data-ask-section="${section.id}" title="Jump to ${escapeHtml(section.title)}">
           <span data-icon="${section.icon}"></span>
           <span>${escapeHtml(section.label)}</span>
-        </a>
+        </button>
       `).join('')}
     </nav>
   ` : '';
 
   return `
-    <div class="ask-report">
+    <div class="ask-report${variant ? ` ask-report-${variant}` : ''}">
       <header class="ask-report-header">
-        <div class="ask-report-kicker">Research brief</div>
+        <div class="ask-report-kicker">${escapeHtml(kicker)}</div>
         <h2>${escapeHtml(document.title)}</h2>
         <div class="ask-report-metrics">${metrics}</div>
       </header>

@@ -60,7 +60,7 @@ import {
 } from './activation.js';
 import {
   buildContextPackFromDb,
-  makeKnowledgeArtifactFromDb,
+  makeKnowledgeArtifactWithEngineFromDb,
   type MakeArtifactType,
 } from './context-packs.js';
 import { detectAvailableEngines, getGrokOauthStatus } from './engine.js';
@@ -1199,6 +1199,13 @@ async function handleApi(
     }
 
     if (req.method === 'POST' && pathname === '/api/make') {
+      const makeController = new AbortController();
+      let responseFinished = false;
+      const abortMake = () => {
+        if (!responseFinished) makeController.abort();
+      };
+      req.on('aborted', abortMake);
+      res.on('close', abortMake);
       const body = JSON.parse(await parseBody(req)) as {
         type?: MakeArtifactType;
         query?: string;
@@ -1216,30 +1223,45 @@ async function handleApi(
         'flashcards',
       ];
       if (!body.type || !allowedTypes.includes(body.type)) {
+        responseFinished = true;
         sendError(res, 'A valid artifact type is required.', 400);
         return;
       }
       const topic = resolveKnowledgeTopicForRequest(db, res, body.topicId);
-      if (!topic.valid) return;
-      const result = makeKnowledgeArtifactFromDb(db, {
-        type: body.type,
-        query: body.query || '',
-        title: body.title,
-        topicId: topic.topicId,
-        limit: body.limit,
-        synthesis: body.synthesis,
-      });
-      for (const evidence of result.evidence) {
-        const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [evidence.itemId]);
-        if (exists[0]?.values.length) {
-          recordActivationEventFromDb(db, evidence.itemId, 'made', {
-            artifactType: body.type,
-            artifactId: result.savedArtifact.id,
-          });
-        }
+      if (!topic.valid) {
+        responseFinished = true;
+        return;
       }
-      saveDb(db, dbPath);
-      sendJson(res, result);
+      try {
+        const result = await makeKnowledgeArtifactWithEngineFromDb(db, {
+          type: body.type,
+          query: body.query || '',
+          title: body.title,
+          topicId: topic.topicId,
+          limit: body.limit,
+          synthesis: body.synthesis,
+        }, {
+          signal: makeController.signal,
+        });
+        for (const evidence of result.evidence) {
+          const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [evidence.itemId]);
+          if (exists[0]?.values.length) {
+            recordActivationEventFromDb(db, evidence.itemId, 'made', {
+              artifactType: body.type,
+              artifactId: result.savedArtifact.id,
+            });
+          }
+        }
+        saveDb(db, dbPath);
+        responseFinished = true;
+        sendJson(res, result);
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') throw err;
+      } finally {
+        responseFinished = true;
+        req.off('aborted', abortMake);
+        res.off('close', abortMake);
+      }
       return;
     }
 

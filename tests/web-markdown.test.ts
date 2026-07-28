@@ -84,6 +84,49 @@ test('Ask result renderer is structured and escapes untrusted markup', () => {
   assert.ok(!html.includes('<img'));
 });
 
+test('Action plan renderer labels execution sections and uses the artifact variant', () => {
+  const html = renderAskDocument(`
+# Codex orchestration action plan
+
+## Executive Overview
+- Start with a bounded pilot.
+
+## Success Criteria
+- [ ] The pilot has a measurable result.
+
+## Priority Actions
+- [ ] **P0 - Run pilot**: compare the workflow.
+
+## Implementation Steps
+1. Define the task.
+
+## Decisions and Tradeoffs
+| Decision | Recommendation | Why |
+| --- | --- | --- |
+| Scope | One task | Reversible |
+
+## Risks and Mitigations
+Keep the test bounded.
+
+## First 30 Minutes
+1. Open the top source.
+`, {
+    prefix: 'made-1',
+    kicker: 'Action plan',
+    variant: 'artifact',
+  });
+
+  assert.match(html, /class="ask-report ask-report-artifact"/);
+  assert.match(html, />Action plan</);
+  assert.match(html, /data-kind="success"/);
+  assert.match(html, /data-kind="actions"/);
+  assert.match(html, /data-kind="steps"/);
+  assert.match(html, /data-kind="decisions"/);
+  assert.match(html, /data-kind="quickstart"/);
+  assert.match(html, /data-ask-section="made-1-executive-overview"/);
+  assert.doesNotMatch(html, /href="#made-1-/);
+});
+
 test('Ask citation normalizer repairs Grok nested source links', () => {
   const malformed = '([source]([https://x.com/example/status/123))](x.com/example/status/123)))';
   assert.equal(

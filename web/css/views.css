@@ -1688,19 +1688,23 @@ html[data-density="compact"] .bookmark-text { -webkit-line-clamp: 2; line-clamp:
   scrollbar-width: none;
 }
 .ask-report-nav::-webkit-scrollbar { display: none; }
-.ask-report-nav a {
+.ask-report-nav button {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
   gap: 5px;
   min-height: 38px;
+  padding: 0;
+  border: 0;
   border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--fg-3);
+  font-family: inherit;
   font-size: 11px;
   font-weight: 600;
-  text-decoration: none;
+  cursor: pointer;
 }
-.ask-report-nav a:hover {
+.ask-report-nav button:hover {
   border-bottom-color: var(--brand);
   color: var(--brand);
 }
@@ -1728,6 +1732,18 @@ html[data-density="compact"] .bookmark-text { -webkit-line-clamp: 2; line-clamp:
   border-left-color: var(--desk-coral);
   background: color-mix(in srgb, var(--desk-coral) 7%, transparent);
 }
+.ask-report-section[data-kind="success"],
+.ask-report-section[data-kind="quickstart"] {
+  margin: 10px 0;
+  padding: 24px 18px;
+  border-bottom: 0;
+  border-left: 3px solid var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 7%, transparent);
+}
+.ask-report-section[data-kind="quickstart"] {
+  border-left-color: var(--desk-coral);
+  background: color-mix(in srgb, var(--desk-coral) 7%, transparent);
+}
 .ask-report-section-rail {
   display: flex;
   flex-direction: column;
@@ -1745,6 +1761,12 @@ html[data-density="compact"] .bookmark-text { -webkit-line-clamp: 2; line-clamp:
   color: var(--brand);
 }
 .ask-report-section[data-kind="steps"] .ask-report-section-rail [data-icon] {
+  color: var(--desk-coral);
+}
+.ask-report-section[data-kind="success"] .ask-report-section-rail [data-icon] {
+  color: var(--accent-green);
+}
+.ask-report-section[data-kind="quickstart"] .ask-report-section-rail [data-icon] {
   color: var(--desk-coral);
 }
 .ask-report-section-main { min-width: 0; }
@@ -3237,16 +3259,20 @@ html[data-theme="dark"] .xfeed-media-grid { box-shadow: none; }
   .ask-report-header h2 { font-size: 1.45rem; }
   .ask-report-metrics { gap: 7px 12px; }
   .ask-report-nav { gap: 15px; }
-  .ask-report-nav a { min-height: 44px; font-size: 11px; }
+  .ask-report-nav button { min-height: 44px; font-size: 11px; }
   .ask-report-section,
   .ask-report-section[data-kind="actions"],
-  .ask-report-section[data-kind="steps"] {
+  .ask-report-section[data-kind="steps"],
+  .ask-report-section[data-kind="success"],
+  .ask-report-section[data-kind="quickstart"] {
     grid-template-columns: 1fr;
     gap: 10px;
     padding: 22px 0 24px;
   }
   .ask-report-section[data-kind="actions"],
-  .ask-report-section[data-kind="steps"] {
+  .ask-report-section[data-kind="steps"],
+  .ask-report-section[data-kind="success"],
+  .ask-report-section[data-kind="quickstart"] {
     padding: 20px 14px;
   }
   .ask-report-section-rail {

@@ -18,6 +18,21 @@ const SUGGESTIONS = [
 ];
 
 const LS_HISTORY = 'xb.v2.ask.history';
+const ARTIFACT_LABELS = {
+  brief: 'Brief',
+  checklist: 'Action plan',
+  decision: 'Decision memo',
+  experiment: 'Experiment',
+  context_pack: 'Context pack',
+  flashcards: 'Flashcards',
+};
+
+function engineLabel(value) {
+  if (value === 'local-structure') return 'Local structured fallback';
+  if (value === 'grok') return 'Grok';
+  if (value === 'grok-api') return 'Grok API';
+  return value || '';
+}
 
 function safeExternalUrl(value) {
   if (!value) return '';
@@ -207,13 +222,17 @@ export function AskView(root) {
     $$('.ask-make-action', els.transcript).forEach((btn) => btn.addEventListener('click', async () => {
       const turn = convo[Number(btn.dataset.i)];
       if (!turn) return;
+      const artifactType = btn.dataset.type;
+      const artifactLabel = ARTIFACT_LABELS[artifactType] || btn.textContent.trim();
       btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+      btn.innerHTML = `<span class="spinner ask-make-spinner"></span>${artifactType === 'checklist' ? 'Building plan...' : 'Creating...'}`;
       const topicId = turn.scope?.startsWith('topic:') ? turn.scope.slice('topic:'.length) : null;
       try {
         const result = await api.makeArtifact({
-          type: btn.dataset.type,
+          type: artifactType,
           query: turn.question,
-          title: `${turn.question.slice(0, 72)} · ${btn.textContent.trim()}`,
+          title: `${turn.question.slice(0, 72)} · ${artifactLabel}`,
           topicId,
           synthesis: turn.answer,
           limit: 16,
@@ -223,17 +242,25 @@ export function AskView(root) {
           title: result.title,
           markdown: result.markdown,
           type: result.type,
+          engine: result.engine,
         };
+        const historyTurn = history.find((item) => item === turn || (turn.ts && item.ts === turn.ts));
+        if (historyTurn && historyTurn !== turn) historyTurn.madeArtifact = turn.madeArtifact;
+        saveHistory(history);
         renderConversation(convo);
-        toast(`${result.type.replace('_', ' ')} saved`);
+        toast(`${artifactLabel} ready and saved`);
       } catch (err) {
-        btn.disabled = false;
+        renderConversation(convo);
         toast(`Make failed: ${err.message}`);
       }
     }));
     $$('.ask-made-copy', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
       const turn = convo[Number(btn.dataset.i)];
       copy(turn?.madeArtifact?.markdown || '').then(() => toast('Artifact copied'));
+    }));
+    $$('[data-ask-section]', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.askSection);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }));
     els.transcript.scrollTop = els.transcript.scrollHeight;
   }
@@ -322,13 +349,29 @@ export function AskView(root) {
       </div>
     ` : '';
 
+    const madeLabel = ARTIFACT_LABELS[turn.madeArtifact?.type] || 'Reusable artifact';
+    const madeEngine = engineLabel(turn.madeArtifact?.engine);
     const made = turn.madeArtifact ? `
       <div class="ask-made">
         <div class="ask-made-heading">
-          <span><span data-icon="check-circle"></span>${escape(turn.madeArtifact.title)}</span>
+          <span>
+            <span data-icon="check-circle"></span>
+            <span>
+              <strong>${escape(madeLabel)}</strong>
+              <small>Saved to your knowledge base${madeEngine ? ` · ${escape(madeEngine)}` : ''}</small>
+            </span>
+          </span>
           <button class="btn btn-sm btn-ghost ask-made-copy" data-i="${idx}"><span data-icon="copy"></span>Copy</button>
         </div>
-        <pre>${escape(turn.madeArtifact.markdown)}</pre>
+        <div class="ask-made-document">
+          ${renderAskDocument(turn.madeArtifact.markdown, {
+            prefix: `made-${idx}`,
+            fallbackTitle: turn.madeArtifact.title,
+            citationLabels,
+            kicker: madeLabel,
+            variant: 'artifact',
+          })}
+        </div>
       </div>
     ` : '';
 
@@ -458,13 +501,22 @@ export function AskView(root) {
     autoGrow();
     els.send.disabled = true;
 
-    const turn = { question, scope, answer: '', pagesRead: [], wikiUpdates: [], pending: true, status: 'Thinking…' };
+    const turn = {
+      question,
+      scope,
+      answer: '',
+      pagesRead: [],
+      wikiUpdates: [],
+      pending: true,
+      status: 'Thinking…',
+      ts: Date.now(),
+    };
     conversation.push(turn);
     renderConversation(conversation);
 
     try {
       await streamAsk(question, save, scope, turn);
-      history.unshift({ ...turn, pending: false, ts: Date.now() });
+      history.unshift({ ...turn, pending: false });
       saveHistory(history);
       renderHistory();
     } catch (err) {

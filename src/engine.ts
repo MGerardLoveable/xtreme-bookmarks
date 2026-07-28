@@ -233,7 +233,7 @@ export interface InvokeOptions {
 const GROK_RESEARCH_SYSTEM_PROMPT = [
   'You are a focused research Q&A engine.',
   'Answer only from the material supplied in the prompt.',
-  'Do not inspect or modify files, execute commands, browse the web, make plans, delegate work, or ask follow-up questions.',
+  'Do not inspect or modify files, execute commands, browse the web, enter a planning mode, delegate work, or ask follow-up questions.',
   'Return the final answer directly.',
 ].join(' ');
 
