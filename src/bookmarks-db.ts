@@ -695,25 +695,34 @@ export async function updateIndexIncrementally(): Promise<{ dbPath: string; reco
     );
     let newRecords = 0;
     let changedRecords = 0;
+    const pendingRecords: Array<{
+      record: BookmarkRecord;
+      existing: ReturnType<typeof existingById.get>;
+    }> = [];
+
+    // Finish asynchronous file I/O before opening a transaction. sql.js export/save
+    // can end an open transaction, so yielding here allowed background saves to
+    // invalidate this transaction while a large bookmark archive was streaming.
+    for await (const record of iterateJsonLines<BookmarkRecord>(cachePath)) {
+      const existing = existingById.get(record.id);
+      if (existing?.sourceHash === bookmarkSourceHash(record)) continue;
+      if (existing) changedRecords += 1;
+      else newRecords += 1;
+      pendingRecords.push({ record, existing });
+    }
 
     db.run('BEGIN TRANSACTION');
     try {
-      for await (const record of iterateJsonLines<BookmarkRecord>(cachePath)) {
-        const existing = existingById.get(record.id);
-        const nextHash = bookmarkSourceHash(record);
-        if (existing?.sourceHash === nextHash) continue;
+      for (const { record, existing } of pendingRecords) {
         if (existing) {
           db.run('DELETE FROM bookmarks_fts WHERE rowid = ?', [existing.rowid]);
-          changedRecords += 1;
-        } else {
-          newRecords += 1;
         }
         insertRecord(db, record, existing?.preserved);
         refreshBookmarkSearchRow(db, record.id);
       }
       db.run('COMMIT');
     } catch (err) {
-      db.run('ROLLBACK');
+      try { db.run('ROLLBACK'); } catch { /* preserve the original transaction error */ }
       throw err;
     }
 

@@ -1977,8 +1977,12 @@ async function handleApi(
         }
         send('done', syncResult);
         if (state) {
-          state.lastGrabSucceededAt = new Date().toISOString();
-          state.lastGrabError = undefined;
+          if (syncResult.incomplete) {
+            state.lastGrabError = syncResult.stopReason;
+          } else {
+            state.lastGrabSucceededAt = new Date().toISOString();
+            state.lastGrabError = undefined;
+          }
         }
       } catch (err) {
         if (state) state.lastGrabError = (err as Error).message;
@@ -2770,8 +2774,12 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
     if (syncResult.added > 0) {
       await rebuildIndexAndReload(dbPath, state, true);
     }
-    state.lastGrabSucceededAt = new Date().toISOString();
-    state.lastGrabError = undefined;
+    if (syncResult.incomplete) {
+      state.lastGrabError = syncResult.stopReason;
+    } else {
+      state.lastGrabSucceededAt = new Date().toISOString();
+      state.lastGrabError = undefined;
+    }
   } catch (err) {
     state.lastGrabError = (err as Error).message;
     console.error(`  [${ts}] Auto-grab failed:`, state.lastGrabError);

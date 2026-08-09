@@ -117,6 +117,46 @@ test('updateIndexIncrementally adds new rows without rebuilding existing rows', 
   });
 });
 
+test('updateIndexIncrementally cannot have its transaction invalidated by a background save', async () => {
+  await withIsolatedDataDir(async () => {
+    await buildIndex();
+    const dbPath = twitterBookmarksIndexPath();
+    const liveDb = await openDb(dbPath);
+    const added = {
+      ...FIXTURES[0],
+      id: '4',
+      tweetId: '4',
+      url: 'https://x.com/carol/status/4',
+      text: 'Indexed without transaction interference',
+    };
+    await writeFile(
+      path.join(process.env.FT_DATA_DIR!, 'bookmarks.jsonl'),
+      [...FIXTURES, added].map((record) => JSON.stringify(record)).join('\n') + '\n',
+    );
+
+    const backgroundSave = new Promise<void>((resolve, reject) => {
+      setImmediate(() => {
+        try {
+          saveDb(liveDb, dbPath);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    try {
+      const result = await updateIndexIncrementally();
+      await backgroundSave;
+      assert.equal(result.newRecords, 1);
+      assert.equal(result.recordCount, 4);
+      assert.equal((await searchBookmarks({ query: 'transaction interference' }))[0]?.id, '4');
+    } finally {
+      liveDb.close();
+    }
+  });
+});
+
 test('updateIndexIncrementally refreshes changed rows and preserves classifications', async () => {
   await withIsolatedDataDir(async () => {
     await buildIndex();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -426,6 +426,95 @@ test('syncBookmarksGraphQL invalidates cached browser credentials on 401 without
       (err: Error) => err.message.includes('401') && !err.message.includes('secret'),
     );
     await assert.rejects(access(cachePath), (err: NodeJS.ErrnoException) => err.code === 'ENOENT');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('syncBookmarksGraphQL scans past a familiar page to catch interleaved new bookmarks', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-overlap-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+
+  const existing = ['100', '90', '80'].map((id) => makeRecord({ id, tweetId: id }));
+  await writeFile(path.join(dir, 'bookmarks.jsonl'), existing.map((record) => JSON.stringify(record)).join('\n') + '\n');
+
+  const tweet = (id: string) => makeTweetResult({
+    legacy: { id_str: id, full_text: `Tweet ${id}` },
+    tweet: { rest_id: id },
+  });
+  const pages = new Map<string, any>([
+    ['', makeGraphQLResponse([tweet('100')], 'cursor-1')],
+    ['cursor-1', makeGraphQLResponse([tweet('110')], 'cursor-2')],
+    ['cursor-2', makeGraphQLResponse([tweet('90')], 'cursor-3')],
+    ['cursor-3', makeGraphQLResponse([tweet('80')], 'cursor-4')],
+  ]);
+  let requests = 0;
+  globalThis.fetch = async (input) => {
+    requests += 1;
+    const url = new URL(String(input));
+    const variables = JSON.parse(url.searchParams.get('variables') || '{}');
+    return Response.json(pages.get(String(variables.cursor ?? '')));
+  };
+
+  try {
+    const result = await syncBookmarksGraphQL({
+      csrfToken: 'csrf',
+      cookieHeader: 'ct0=csrf; auth_token=token',
+      stalePageLimit: 2,
+      delayMs: 0,
+      maxPages: 10,
+    });
+    const saved = (await readFile(path.join(dir, 'bookmarks.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+
+    assert.equal(requests, 4);
+    assert.equal(result.added, 1);
+    assert.equal(result.stopReason, 'caught up after stable overlap');
+    assert.equal(result.incomplete, undefined);
+    assert.ok(saved.some((record) => record.id === '110'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('syncBookmarksGraphQL saves fetched bookmarks when a later page is interrupted', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-partial-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  await writeFile(path.join(dir, 'bookmarks.jsonl'), `${JSON.stringify(makeRecord({ id: '100', tweetId: '100' }))}\n`);
+
+  const addedTweet = makeTweetResult({
+    legacy: { id_str: '110', full_text: 'Saved before interruption' },
+    tweet: { rest_id: '110' },
+  });
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    if (requests === 1) return Response.json(makeGraphQLResponse([addedTweet], 'cursor-1'));
+    return new Response('temporary upstream failure', { status: 400 });
+  };
+
+  try {
+    const result = await syncBookmarksGraphQL({
+      csrfToken: 'csrf',
+      cookieHeader: 'ct0=csrf; auth_token=token',
+      delayMs: 0,
+      maxPages: 10,
+    });
+    const saved = (await readFile(path.join(dir, 'bookmarks.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+
+    assert.equal(result.added, 1);
+    assert.equal(result.incomplete, true);
+    assert.match(result.stopReason, /interrupted after 1 page.*400/);
+    assert.ok(saved.some((record) => record.id === '110'));
   } finally {
     globalThis.fetch = previousFetch;
     if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;

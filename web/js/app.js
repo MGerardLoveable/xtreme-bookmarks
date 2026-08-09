@@ -362,9 +362,13 @@ async function runGrab() {
       }
       if (event === 'done') {
         const doneAdded = typeof data?.added === 'number' ? data.added : addedCount;
-        const message = doneAdded ? `Added ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}` : `No new bookmarks · ${data?.stopReason || 'complete'}`;
-        setGrabStatus('done', message, data || {});
-        toast(message, 4500);
+        const message = data?.incomplete
+          ? `Saved ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}, but X interrupted the scan. Press Grab again to continue.`
+          : doneAdded
+            ? `Added ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}`
+            : `No new bookmarks · ${data?.stopReason || 'complete'}`;
+        setGrabStatus(data?.incomplete ? 'error' : 'done', message, data || {});
+        toast(message, data?.incomplete ? 8000 : 4500);
         refreshStatusBar();
         if (views.library && views.library.refresh) views.library.refresh();
         clearGrabStatusSoon();

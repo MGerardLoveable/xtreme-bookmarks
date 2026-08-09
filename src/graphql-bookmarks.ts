@@ -178,6 +178,8 @@ export interface SyncResult {
   stopReason: string;
   cachePath: string;
   statePath: string;
+  /** True when fetched records were saved but the remote scan ended with an error. */
+  incomplete?: boolean;
 }
 
 function parseSnowflake(value?: string | null): bigint | null {
@@ -678,15 +680,22 @@ export function mergeRecords(
   incoming: BookmarkRecord[]
 ): { merged: BookmarkRecord[]; added: number } {
   const byId = new Map(existing.map((r) => [r.id, r]));
+  const added = mergeIntoRecordMap(byId, incoming);
+  return { merged: sortedRecordsFromMap(byId), added };
+}
+
+function mergeIntoRecordMap(byId: Map<string, BookmarkRecord>, incoming: BookmarkRecord[]): number {
   let added = 0;
   for (const record of incoming) {
     const prev = byId.get(record.id);
     if (!prev) added += 1;
     byId.set(record.id, mergeBookmarkRecord(prev, record));
   }
-  const merged = Array.from(byId.values());
-  merged.sort((a, b) => compareBookmarkChronology(b, a));
-  return { merged, added };
+  return added;
+}
+
+function sortedRecordsFromMap(byId: Map<string, BookmarkRecord>): BookmarkRecord[] {
+  return Array.from(byId.values()).sort((a, b) => compareBookmarkChronology(b, a));
 }
 
 function updateState(
@@ -739,8 +748,8 @@ export async function syncBookmarksGraphQL(
   const statePath = twitterBackfillStatePath();
   const loaded = await loadExistingBookmarks();
   let existing = loaded.records;
+  const recordsById = new Map(existing.map((record) => [record.id, record]));
   const bookmarkedAtRepaired = loaded.repaired;
-  const newestKnownId = incremental ? existing[0]?.id : undefined;
   const previousMeta = (await pathExists(metaPath))
     ? await readJson<BookmarkCacheMeta>(metaPath)
     : undefined;
@@ -756,6 +765,8 @@ export async function syncBookmarksGraphQL(
   const allSeenIds: string[] = [];
   let stopReason = 'unknown';
   let emptyPages = 0;
+  let interrupted = false;
+  const seenCursors = new Set<string>();
   const checkpointState = async (reason: string) => {
     await writeJson(statePath, {
       ...prevState,
@@ -769,104 +780,7 @@ export async function syncBookmarksGraphQL(
     } satisfies BookmarkBackfillState);
   };
 
-  while (page < maxPages) {
-    throwIfAborted(abortSignal);
-    if (Date.now() - started > maxMinutes * 60_000) {
-      stopReason = 'max runtime reached';
-      break;
-    }
-
-    const result = await fetchPageWithRetry(csrfToken, cursor, cookieHeader, pageSize, abortSignal);
-    page += 1;
-
-    if (result.records.length === 0 && !result.nextCursor) {
-      stopReason = 'end of bookmarks';
-      break;
-    }
-    emptyPages = result.records.length === 0 ? emptyPages + 1 : 0;
-    if (emptyPages >= 3) {
-      stopReason = 'no new bookmarks (empty pages)';
-      break;
-    }
-
-    const { merged, added } = mergeRecords(existing, result.records);
-    existing = merged;
-    totalAdded += added;
-    result.records.forEach((r) => allSeenIds.push(r.id));
-    const reachedLatestStored = Boolean(newestKnownId) && result.records.some((record) => record.id === newestKnownId);
-
-    stalePages = added === 0 ? stalePages + 1 : 0;
-
-    options.onProgress?.({
-      page,
-      totalFetched: allSeenIds.length,
-      newAdded: totalAdded,
-      running: true,
-      done: false,
-    });
-
-    // Update cursor before stop checks so auto-continue has the right position
-    cursor = result.nextCursor;
-
-    if (options.targetAdds && totalAdded >= options.targetAdds) {
-      stopReason = 'target additions reached';
-      break;
-    }
-    if (reachedLatestStored) {
-      stopReason = 'caught up to newest stored bookmark';
-      break;
-    }
-    if (stalePages >= stalePageLimit) {
-      stopReason = 'no new bookmarks (stale)';
-      break;
-    }
-    if (!cursor) {
-      stopReason = 'end of bookmarks';
-      break;
-    }
-
-    if (page % checkpointEvery === 0) {
-      await writeJsonLines(cachePath, existing);
-      await checkpointState('checkpoint');
-    }
-
-    if (page < maxPages) await sleep(delayMs, abortSignal);
-  }
-
-  if (stopReason === 'unknown') stopReason = page >= maxPages ? 'max pages reached' : 'unknown';
-
-  // ── Auto-continue: detect users stuck at the old 10k cap ──────────
-  // If we finished an incremental sync, the user has ≥9,500 bookmarks,
-  // and there's a cursor to keep going, automatically page through to
-  // find bookmarks the old 20-per-page × 500-page cap missed.
-  const OLD_CAP_THRESHOLD = 9_500;
-  const shouldAutoContinue =
-    incremental &&
-    !options.resumeCursor &&
-    existing.length >= OLD_CAP_THRESHOLD &&
-    stopReason === 'max pages reached' &&
-    cursor != null;
-
-  if (shouldAutoContinue) {
-    // Use the first page's actual item count to estimate how many pages
-    // we need to scan through before reaching bookmarks beyond the old cap.
-    const firstPageSize = allSeenIds.length > 0 ? Math.min(allSeenIds.length, pageSize) : pageSize;
-    const estimatedScanPages = Math.ceil(existing.length / firstPageSize);
-    const scanStartPage = page;
-
-    let continueAdded = 0;
-    emptyPages = 0;
-
-    options.onProgress?.({
-      page,
-      totalFetched: allSeenIds.length,
-      newAdded: totalAdded,
-      running: true,
-      done: false,
-      stopReason: `scanning past ${existing.length.toLocaleString()} existing bookmarks (~${estimatedScanPages} pages)...`,
-    });
-
-    // Continue paginating with no stale-page or caught-up limits
+  try {
     while (page < maxPages) {
       throwIfAborted(abortSignal);
       if (Date.now() - started > maxMinutes * 60_000) {
@@ -887,31 +801,46 @@ export async function syncBookmarksGraphQL(
         break;
       }
 
-      const { merged, added } = mergeRecords(existing, result.records);
-      existing = merged;
+      const added = mergeIntoRecordMap(recordsById, result.records);
       totalAdded += added;
-      continueAdded += added;
       result.records.forEach((r) => allSeenIds.push(r.id));
-      cursor = result.nextCursor;
 
-      const scanProgress = page - scanStartPage;
+      stalePages = added === 0 ? stalePages + 1 : 0;
+
       options.onProgress?.({
         page,
         totalFetched: allSeenIds.length,
         newAdded: totalAdded,
         running: true,
         done: false,
-        stopReason: continueAdded > 0
-          ? undefined // found new bookmarks — normal progress display
-          : `scanning past existing bookmarks (${scanProgress}/~${estimatedScanPages})...`,
       });
 
+      // Update cursor before stop checks so backfill resume has the right position.
+      cursor = result.nextCursor;
+
+      if (options.targetAdds && totalAdded >= options.targetAdds) {
+        stopReason = 'target additions reached';
+        break;
+      }
+      // A single familiar bookmark is not a safe boundary: X can interleave
+      // familiar and newly saved items. Require a stable multi-page overlap.
+      if (stalePages >= stalePageLimit) {
+        stopReason = 'caught up after stable overlap';
+        break;
+      }
       if (!cursor) {
         stopReason = 'end of bookmarks';
         break;
       }
+      if (seenCursors.has(cursor)) {
+        stopReason = 'pagination cursor repeated';
+        cursor = undefined;
+        break;
+      }
+      seenCursors.add(cursor);
 
       if (page % checkpointEvery === 0) {
+        existing = sortedRecordsFromMap(recordsById);
         await writeJsonLines(cachePath, existing);
         await checkpointState('checkpoint');
       }
@@ -919,12 +848,105 @@ export async function syncBookmarksGraphQL(
       if (page < maxPages) await sleep(delayMs, abortSignal);
     }
 
-    if (stopReason !== 'end of bookmarks' && page >= maxPages) {
-      stopReason = 'max pages reached';
+    if (stopReason === 'unknown') stopReason = page >= maxPages ? 'max pages reached' : 'unknown';
+
+    // ── Auto-continue: detect users stuck at the old 10k cap ──────────
+    // If we finished an incremental sync, the user has ≥9,500 bookmarks,
+    // and there's a cursor to keep going, automatically page through to
+    // find bookmarks the old 20-per-page × 500-page cap missed.
+    const OLD_CAP_THRESHOLD = 9_500;
+    const shouldAutoContinue =
+      incremental &&
+      !options.resumeCursor &&
+      recordsById.size >= OLD_CAP_THRESHOLD &&
+      stopReason === 'max pages reached' &&
+      cursor != null;
+
+    if (shouldAutoContinue) {
+      // Use the first page's actual item count to estimate how many pages
+      // we need to scan through before reaching bookmarks beyond the old cap.
+      const firstPageSize = allSeenIds.length > 0 ? Math.min(allSeenIds.length, pageSize) : pageSize;
+      const estimatedScanPages = Math.ceil(existing.length / firstPageSize);
+      const scanStartPage = page;
+
+      let continueAdded = 0;
+      emptyPages = 0;
+
+      options.onProgress?.({
+        page,
+        totalFetched: allSeenIds.length,
+        newAdded: totalAdded,
+        running: true,
+        done: false,
+        stopReason: `scanning past ${recordsById.size.toLocaleString()} existing bookmarks (~${estimatedScanPages} pages)...`,
+      });
+
+      // Continue paginating with no stale-page or caught-up limits
+      while (page < maxPages) {
+        throwIfAborted(abortSignal);
+        if (Date.now() - started > maxMinutes * 60_000) {
+          stopReason = 'max runtime reached';
+          break;
+        }
+
+        const result = await fetchPageWithRetry(csrfToken, cursor, cookieHeader, pageSize, abortSignal);
+        page += 1;
+
+        if (result.records.length === 0 && !result.nextCursor) {
+          stopReason = 'end of bookmarks';
+          break;
+        }
+        emptyPages = result.records.length === 0 ? emptyPages + 1 : 0;
+        if (emptyPages >= 3) {
+          stopReason = 'no new bookmarks (empty pages)';
+          break;
+        }
+
+        const added = mergeIntoRecordMap(recordsById, result.records);
+        totalAdded += added;
+        continueAdded += added;
+        result.records.forEach((r) => allSeenIds.push(r.id));
+        cursor = result.nextCursor;
+
+        const scanProgress = page - scanStartPage;
+        options.onProgress?.({
+          page,
+          totalFetched: allSeenIds.length,
+          newAdded: totalAdded,
+          running: true,
+          done: false,
+          stopReason: continueAdded > 0
+            ? undefined // found new bookmarks — normal progress display
+            : `scanning past existing bookmarks (${scanProgress}/~${estimatedScanPages})...`,
+        });
+
+        if (!cursor) {
+          stopReason = 'end of bookmarks';
+          break;
+        }
+
+        if (page % checkpointEvery === 0) {
+          existing = sortedRecordsFromMap(recordsById);
+          await writeJsonLines(cachePath, existing);
+          await checkpointState('checkpoint');
+        }
+
+        if (page < maxPages) await sleep(delayMs, abortSignal);
+      }
+
+      if (stopReason !== 'end of bookmarks' && page >= maxPages) {
+        stopReason = 'max pages reached';
+      }
     }
+  } catch (error) {
+    if (totalAdded === 0) throw error;
+    interrupted = true;
+    const message = error instanceof Error ? error.message : String(error);
+    stopReason = `sync interrupted after ${page} page${page === 1 ? '' : 's'}: ${message}`;
   }
 
   const syncedAt = new Date().toISOString();
+  existing = sortedRecordsFromMap(recordsById);
   const bookmarkedAtMissing = existing.filter((record) => !record.bookmarkedAt).length;
   await writeJsonLines(cachePath, existing);
   await writeJson(metaPath, {
@@ -940,6 +962,8 @@ export async function syncBookmarksGraphQL(
     'caught up to newest stored bookmark',
     'no new bookmarks (empty pages)',
     'no new bookmarks (stale)',
+    'caught up after stable overlap',
+    'pagination cursor repeated',
   ]);
   const savedCursor = terminalReasons.has(stopReason) ? undefined : cursor;
 
@@ -969,6 +993,7 @@ export async function syncBookmarksGraphQL(
     stopReason,
     cachePath,
     statePath,
+    incomplete: interrupted || undefined,
   };
 }
 
