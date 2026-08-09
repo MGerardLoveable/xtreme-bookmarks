@@ -19,6 +19,7 @@ import {
   suggestSearchCorrection,
 } from './bookmarks-db.js';
 import { buildSearchPlan, type SearchPlan } from './search.js';
+import { bookmarkSortClause, hasXOrderSql } from './bookmark-order.js';
 import { readJson, readJsonLines, writeJsonLines } from './fs.js';
 import { browserUserDataDir, getBrowser, listBrowserIds } from './browsers.js';
 import { addBookmarkToWiki, compileMd } from './md.js';
@@ -737,14 +738,6 @@ const BOOKMARK_COLS = `
   b.quoted_tweet_json, b.quoted_text
 `;
 
-function sortClause(dir: string = 'desc'): string {
-  const d = dir === 'asc' ? 'ASC' : 'DESC';
-  return `ORDER BY CASE
-    WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at
-    WHEN b.posted_at GLOB '____-__-__*' THEN b.posted_at
-    ELSE '' END ${d}, CAST(b.tweet_id AS INTEGER) ${d}`;
-}
-
 // ── API handlers ────────────────────────────────────────────────────────────
 
 function handleBookmarks(db: Database, params: URLSearchParams): unknown {
@@ -818,7 +811,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
          CASE WHEN instr(lower(b.text), ?) > 0 THEN 0 ELSE 1 END,
          bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) ASC,
          CASE WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at ELSE b.posted_at END DESC`
-    : sortClause(filters.sort);
+    : bookmarkSortClause(filters.sort === 'asc' ? 'asc' : 'desc');
   const sql = `SELECT ${BOOKMARK_COLS} FROM bookmarks b
     ${plan.broadQuery ? 'JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid' : ''}
     ${active.where} ${searchOrder} LIMIT ? OFFSET ?`;
@@ -863,11 +856,24 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
   }
   attachActivationMetadataFromDb(db, bookmarks);
 
+  const orderRows = db.exec(
+    `SELECT COALESCE(SUM(CASE WHEN ${hasXOrderSql('b')} THEN 1 ELSE 0 END), 0)
+     FROM bookmarks b ${join} ${active.where}`,
+    active.params,
+  );
+  const positioned = Number(orderRows[0]?.values?.[0]?.[0] ?? 0);
+
   return {
     bookmarks,
     total,
     limit: filters.limit,
     offset: filters.offset,
+    order: {
+      mode: plan.broadQuery ? 'relevance' : 'x',
+      direction: filters.sort === 'asc' ? 'asc' : 'desc',
+      positioned,
+      unpositioned: Math.max(0, total - positioned),
+    },
     search: filters.q ? {
       query: originalPlan.normalized,
       effectiveQuery: correction ?? originalPlan.text,

@@ -9,6 +9,7 @@ import type { ClassificationSummary } from './bookmark-classify.js';
 import { createHash } from 'node:crypto';
 import { buildSearchPlan, levenshteinDistance, type SearchPlan } from './search.js';
 import { ensureActivationSchema } from './activation.js';
+import { bookmarkSortClause } from './bookmark-order.js';
 
 const SCHEMA_VERSION = 10;
 
@@ -188,20 +189,6 @@ function buildBookmarkWhereClause(filters: BookmarkTimelineFilters): {
     where: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
     params,
   };
-}
-
-function bookmarkSortClause(direction: 'asc' | 'desc' = 'desc'): string {
-  const normalized = direction === 'asc' ? 'ASC' : 'DESC';
-  return `
-    ORDER BY
-      CASE WHEN b.sort_index GLOB '[0-9]*' THEN CAST(b.sort_index AS INTEGER) ELSE 0 END ${normalized},
-      CASE
-        WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at
-        WHEN b.posted_at GLOB '____-__-__*' THEN b.posted_at
-        ELSE ''
-      END ${normalized},
-      CAST(b.tweet_id AS INTEGER) ${normalized}
-  `;
 }
 
 function initSchema(db: Database): void {

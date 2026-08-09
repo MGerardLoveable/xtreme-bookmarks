@@ -119,6 +119,7 @@ export function LibraryView(root) {
     facets: { categories: [], domains: [], collections: [], authors: [] },
     inbox: false,
     search: null,
+    order: null,
     projects: [],
   };
   let listController = null;
@@ -188,8 +189,8 @@ export function LibraryView(root) {
           <button class="btn btn-ghost btn-sm" id="lib-presentation" title="Switch between refined and classic Library">
             <span data-icon="layers"></span><span id="lib-presentation-label">Classic</span>
           </button>
-          <button class="btn btn-ghost btn-sm" id="lib-sort" title="Toggle sort direction">
-            <span data-icon="calendar"></span><span id="lib-sort-label">Newest</span>
+          <button class="btn btn-ghost btn-sm" id="lib-sort" title="Show bookmarks in the same saved order as X">
+            <span data-icon="bookmark"></span><span id="lib-sort-label">X order</span>
           </button>
           <button class="btn btn-ghost btn-sm" id="lib-clear" title="Clear all filters">
             <span data-icon="x"></span>Clear
@@ -540,10 +541,11 @@ export function LibraryView(root) {
         limit: PAGE_SIZE,
         offset: state.offset,
       };
-      const { bookmarks, total, search } = await api.listBookmarks(params, { signal: controller.signal });
+      const { bookmarks, total, search, order } = await api.listBookmarks(params, { signal: controller.signal });
       if (controller.signal.aborted || state.section !== requestedSection) return;
       state.total = total;
       state.search = search || null;
+      state.order = order || null;
       state.hasMore = state.offset + bookmarks.length < total;
       state.bookmarks = append ? [...state.bookmarks, ...bookmarks] : bookmarks;
       renderList();
@@ -568,8 +570,15 @@ export function LibraryView(root) {
       return;
     }
     const activeFilter = state.filters.collection || state.filters.category || state.filters.domain || state.filters.author || state.filters.readStatus || '';
+    const usesXOrder = state.order?.mode === 'x';
+    const unknownOrder = Number(state.order?.unpositioned || 0);
+    els.sort.disabled = !usesXOrder;
+    els.sortLabel.textContent = usesXOrder ? (state.sort === 'desc' ? 'X order' : 'Oldest saved') : 'Best match';
+    els.sort.title = usesXOrder ? 'Show bookmarks in the same saved order as X' : 'Search results are ordered by relevance';
     els.summary.innerHTML = `
       <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> of ${fmtNumber(total)} results</span>
+      <span class="summary-context" title="${usesXOrder ? 'Matches the saved bookmark order shown by X' : 'Search results are ordered by relevance'}"><span data-icon="${usesXOrder ? 'bookmark' : 'sparkles'}"></span>${usesXOrder ? (state.sort === 'desc' ? 'X order' : 'Oldest saved') : 'Best match'}</span>
+      ${unknownOrder ? `<span class="summary-context" title="These legacy records were captured before X order positions were stored and appear after positioned bookmarks"><span data-icon="circle-help"></span>${fmtNumber(unknownOrder)} position${unknownOrder === 1 ? '' : 's'} unknown</span>` : ''}
       ${activeFilter ? `<span class="summary-context">${escape(String(activeFilter))}</span>` : ''}
       ${state.search?.correction ? `<button class="search-correction" id="lib-search-correction">Showing results for <strong>${escape(state.search.correction)}</strong><span>Clear</span></button>` : ''}
       ${state.inbox ? `<span class="summary-context"><span data-icon="inbox"></span>Since ${escape(new Date(inboxSince).toLocaleDateString())}</span><button class="btn btn-sm btn-ghost" id="lib-inbox-done">Mark inbox reviewed</button>` : ''}
@@ -1425,7 +1434,7 @@ export function LibraryView(root) {
   els.search.addEventListener('input', (e) => onSearch(e.target.value));
   els.sort.addEventListener('click', () => {
     state.sort = state.sort === 'desc' ? 'asc' : 'desc';
-    els.sortLabel.textContent = state.sort === 'desc' ? 'Newest' : 'Oldest';
+    els.sortLabel.textContent = state.sort === 'desc' ? 'X order' : 'Oldest saved';
     state.offset = 0;
     load();
   });
