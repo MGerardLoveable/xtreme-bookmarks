@@ -158,7 +158,7 @@ export function LibraryView(root) {
           </button>
           <div class="search library-search">
             <span class="search-icon" data-icon="search"></span>
-            <input class="input" id="lib-search" type="text" placeholder="Search bookmarks, @handles, category:tool…" autocomplete="off" spellcheck="false">
+            <input class="input" id="lib-search" type="text" placeholder="Search every word, author, note, link…" autocomplete="off" spellcheck="false">
             <span class="search-shortcut">/</span>
           </div>
           <div class="toolbar-segment" id="lib-display-mode" aria-label="Display mode">

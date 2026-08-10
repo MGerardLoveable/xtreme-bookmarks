@@ -11,7 +11,10 @@ import { buildSearchPlan, levenshteinDistance, type SearchPlan } from './search.
 import { ensureActivationSchema } from './activation.js';
 import { bookmarkSortClause } from './bookmark-order.js';
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
+
+export const BOOKMARK_SEARCH_BM25_SQL =
+  'bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0, 1.5, 1.5, 1.5, 0.8, 2.0)';
 
 export interface SearchResult {
   id: string;
@@ -301,7 +304,7 @@ export function ensureMigrations(db: Database): void {
       try { db.run('ALTER TABLE bookmarks ADD COLUMN source_hash TEXT'); } catch { /* already exists */ }
     }
   }
-  if (version < 9) {
+  if (version < 11) {
     createSearchAuxiliaryTables(db);
     db.run('DROP TABLE IF EXISTS bookmarks_fts_vocab');
     db.run('DROP TABLE IF EXISTS bookmarks_fts');
@@ -332,6 +335,18 @@ function createSearchAuxiliaryTables(db: Database): void {
     color TEXT NOT NULL DEFAULT 'yellow',
     created_at TEXT NOT NULL
   )`);
+  db.run(`CREATE TABLE IF NOT EXISTS collections (
+    name TEXT PRIMARY KEY,
+    color TEXT,
+    created_at TEXT NOT NULL,
+    keywords TEXT
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS bookmark_collections (
+    bookmark_id TEXT NOT NULL,
+    collection_name TEXT NOT NULL REFERENCES collections(name) ON DELETE CASCADE,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (bookmark_id, collection_name)
+  )`);
 }
 
 function createSearchTable(db: Database): void {
@@ -344,8 +359,51 @@ function createSearchTable(db: Database): void {
     highlights,
     links,
     domains,
+    media,
+    taxonomy,
+    collections,
+    identifiers,
+    quoted_metadata,
     tokenize='porter unicode61 remove_diacritics 2'
   )`);
+}
+
+function bookmarkSearchProjection(where = ''): string {
+  const jsonText = (column: string) => `COALESCE((
+    SELECT group_concat(j.value, ' ')
+    FROM json_tree(CASE WHEN json_valid(${column}) THEN ${column} ELSE '[]' END) j
+    WHERE j.type = 'text'
+  ), '')`;
+
+  return `
+    SELECT
+      b.rowid,
+      COALESCE(b.text, ''),
+      COALESCE(b.quoted_text, ''),
+      COALESCE(b.author_handle, ''),
+      COALESCE(b.author_name, ''),
+      COALESCE((SELECT group_concat(n.note, ' ') FROM bookmark_notes n WHERE n.bookmark_id = b.id), ''),
+      COALESCE((SELECT group_concat(h.text_fragment, ' ') FROM bookmark_highlights h WHERE h.bookmark_id = b.id), ''),
+      ${jsonText('b.links_json')},
+      COALESCE(b.domains, ''),
+      ${jsonText('b.media_json')},
+      trim(
+        COALESCE(b.categories, '') || ' ' ||
+        COALESCE(b.primary_category, '') || ' ' ||
+        ${jsonText('b.tags_json')} || ' ' ||
+        ${jsonText('b.github_urls')}
+      ),
+      COALESCE((SELECT group_concat(c.collection_name, ' ') FROM bookmark_collections c WHERE c.bookmark_id = b.id), ''),
+      trim(
+        COALESCE(b.url, '') || ' ' ||
+        COALESCE(b.tweet_id, '') || ' ' ||
+        COALESCE(b.conversation_id, '') || ' ' ||
+        COALESCE(b.ingested_via, '') || ' ' ||
+        COALESCE(b.language, '')
+      ),
+      ${jsonText('b.quoted_tweet_json')}
+    FROM bookmarks b
+    ${where}`;
 }
 
 export function refreshBookmarkSearchRow(db: Database, bookmarkId: string): void {
@@ -355,20 +413,10 @@ export function refreshBookmarkSearchRow(db: Database, bookmarkId: string): void
   db.run('DELETE FROM bookmarks_fts WHERE rowid = ?', [rowid]);
   db.run(
     `INSERT INTO bookmarks_fts(
-      rowid, text, quoted_text, author_handle, author_name, notes, highlights, links, domains
+      rowid, text, quoted_text, author_handle, author_name, notes, highlights, links, domains,
+      media, taxonomy, collections, identifiers, quoted_metadata
     )
-    SELECT
-      b.rowid,
-      COALESCE(b.text, ''),
-      COALESCE(b.quoted_text, ''),
-      COALESCE(b.author_handle, ''),
-      COALESCE(b.author_name, ''),
-      COALESCE((SELECT group_concat(n.note, ' ') FROM bookmark_notes n WHERE n.bookmark_id = b.id), ''),
-      COALESCE((SELECT group_concat(h.text_fragment, ' ') FROM bookmark_highlights h WHERE h.bookmark_id = b.id), ''),
-      COALESCE(b.links_json, ''),
-      COALESCE(b.domains, '')
-    FROM bookmarks b
-    WHERE b.id = ?`,
+    ${bookmarkSearchProjection('WHERE b.id = ?')}`,
     [bookmarkId],
   );
 }
@@ -379,19 +427,10 @@ export function rebuildBookmarkSearchIndex(db: Database): void {
   db.run('DELETE FROM bookmarks_fts');
   db.run(
     `INSERT INTO bookmarks_fts(
-      rowid, text, quoted_text, author_handle, author_name, notes, highlights, links, domains
+      rowid, text, quoted_text, author_handle, author_name, notes, highlights, links, domains,
+      media, taxonomy, collections, identifiers, quoted_metadata
     )
-    SELECT
-      b.rowid,
-      COALESCE(b.text, ''),
-      COALESCE(b.quoted_text, ''),
-      COALESCE(b.author_handle, ''),
-      COALESCE(b.author_name, ''),
-      COALESCE((SELECT group_concat(n.note, ' ') FROM bookmark_notes n WHERE n.bookmark_id = b.id), ''),
-      COALESCE((SELECT group_concat(h.text_fragment, ' ') FROM bookmark_highlights h WHERE h.bookmark_id = b.id), ''),
-      COALESCE(b.links_json, ''),
-      COALESCE(b.domains, '')
-    FROM bookmarks b`,
+    ${bookmarkSearchProjection()}`,
   );
 }
 
@@ -757,7 +796,7 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
       ? `ORDER BY
            CASE WHEN b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?) THEN 0 ELSE 1 END,
            CASE WHEN instr(lower(b.text), ?) > 0 THEN 0 ELSE 1 END,
-           bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) ASC`
+           ${BOOKMARK_SEARCH_BM25_SQL} ASC`
       : `ORDER BY b.posted_at DESC`;
 
     // For FTS ranking we need to join with the FTS table for bm25
@@ -766,7 +805,7 @@ export async function searchBookmarks(options: SearchOptions): Promise<SearchRes
       params.push(plan.strictQuery, plan.phrase);
       sql = `
         SELECT b.id, b.url, b.text, b.author_handle, b.author_name, b.posted_at,
-               bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) as score
+               ${BOOKMARK_SEARCH_BM25_SQL} as score
         FROM bookmarks b
         JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid
         ${where}

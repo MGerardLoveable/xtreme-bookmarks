@@ -17,6 +17,7 @@ import {
   ensureMigrations,
   refreshBookmarkSearchRow,
   suggestSearchCorrection,
+  BOOKMARK_SEARCH_BM25_SQL,
 } from './bookmarks-db.js';
 import { buildSearchPlan, type SearchPlan } from './search.js';
 import { bookmarkSortClause, hasXOrderSql } from './bookmark-order.js';
@@ -368,6 +369,18 @@ function parseJson(value: unknown): unknown[] {
   }
 }
 
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function isImageUrl(value: unknown): value is string {
   return typeof value === 'string' && (
     /pbs\.twimg\.com\/(media|ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb|card_img)\//i.test(value) ||
@@ -434,6 +447,8 @@ function normalizeCategory(value: unknown): string | null {
 
 function mapRow(row: unknown[]): Record<string, unknown> {
   const media = collectMedia(row[15], row[13], row[24]);
+  const mediaObjects = parseJson(row[15]);
+  const quotedTweet = parseJsonObject(row[24]);
   return {
     id: row[0],
     tweetId: row[1],
@@ -451,6 +466,7 @@ function mapRow(row: unknown[]): Record<string, unknown> {
     links: parseJsonArray(row[13]),
     mediaCount: Math.max(Number(row[14] ?? 0), media.length),
     media,
+    mediaObjects,
     linkCount: Number(row[16] ?? 0),
     likeCount: row[17] ?? null,
     repostCount: row[18] ?? null,
@@ -459,7 +475,9 @@ function mapRow(row: unknown[]): Record<string, unknown> {
     bookmarkCount: row[21] ?? null,
     viewCount: row[22] ?? null,
     inWiki: Boolean(row[23] ?? 0),
+    quotedTweet,
     quotedText: row[25] ?? null,
+    tags: parseJsonArray(row[26]),
   };
 }
 
@@ -731,7 +749,7 @@ const BOOKMARK_COLS = `
   b.links_json, b.media_count, b.media_json, b.link_count,
   b.like_count, b.repost_count, b.reply_count,
   b.quote_count, b.bookmark_count, b.view_count, b.in_wiki,
-  b.quoted_tweet_json, b.quoted_text
+  b.quoted_tweet_json, b.quoted_text, b.tags_json
 `;
 
 // ── API handlers ────────────────────────────────────────────────────────────
@@ -805,7 +823,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     ? `ORDER BY
          CASE WHEN b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?) THEN 0 ELSE 1 END,
          CASE WHEN instr(lower(b.text), ?) > 0 THEN 0 ELSE 1 END,
-         bm25(bookmarks_fts, 10.0, 7.0, 3.0, 3.0, 2.0, 2.0, 1.0, 1.0) ASC,
+         ${BOOKMARK_SEARCH_BM25_SQL} ASC,
          CASE WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at ELSE b.posted_at END DESC`
     : bookmarkSortClause(filters.sort === 'asc' ? 'asc' : 'desc');
   const sql = `SELECT ${BOOKMARK_COLS} FROM bookmarks b
@@ -815,10 +833,6 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
   const allParams = [...active.params, ...rankingParams, filters.limit!, filters.offset!];
   const rows = db.exec(sql, allParams);
   const bookmarks = (rows[0]?.values ?? []).map(mapRow);
-
-  if (plan.tokens.length && bookmarks.length) {
-    attachSearchMatches(db, bookmarks, plan);
-  }
 
   // Attach collections to each bookmark
   if (bookmarks.length) {
@@ -849,6 +863,9 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     for (const b of bookmarks as any[]) {
       b.isRead = readMap.get(b.id) ?? false;
     }
+  }
+  if (plan.tokens.length && bookmarks.length) {
+    attachSearchMatches(db, bookmarks, plan);
   }
   attachActivationMetadataFromDb(db, bookmarks);
 
@@ -895,7 +912,13 @@ function attachSearchMatches(db: Database, bookmarks: Record<string, unknown>[],
   const notes = new Map(noteRows.map((row) => [String(row[0]), String(row[1] ?? '')]));
   const highlights = new Map(highlightRows.map((row) => [String(row[0]), String(row[1] ?? '')]));
   const matches = (value: unknown) => {
-    const haystack = String(value ?? '').toLowerCase();
+    const flatten = (entry: unknown): string => {
+      if (typeof entry === 'string' || typeof entry === 'number') return String(entry);
+      if (Array.isArray(entry)) return entry.map(flatten).join(' ');
+      if (entry && typeof entry === 'object') return Object.values(entry).map(flatten).join(' ');
+      return '';
+    };
+    const haystack = flatten(value).toLowerCase();
     return plan.tokens.some((token) => haystack.includes(token));
   };
 
@@ -904,11 +927,16 @@ function attachSearchMatches(db: Database, bookmarks: Record<string, unknown>[],
     const fields: string[] = [];
     if (matches(bookmark.text)) fields.push('tweet');
     if (matches(bookmark.quotedText)) fields.push('quoted post');
+    if (matches(bookmark.quotedTweet) && !fields.includes('quoted post')) fields.push('quoted post');
     if (matches(notes.get(id))) fields.push('note');
     if (matches(highlights.get(id))) fields.push('highlight');
     if (matches(bookmark.authorHandle) || matches(bookmark.authorName)) fields.push('author');
     if (matches((bookmark.links as string[] | undefined)?.join(' '))) fields.push('link');
     if (matches((bookmark.domains as string[] | undefined)?.join(' '))) fields.push('domain');
+    if (matches(bookmark.mediaObjects)) fields.push('media description');
+    if (matches(bookmark.categories) || matches(bookmark.tags)) fields.push('topic');
+    if (matches(bookmark.collections)) fields.push('collection');
+    if (matches(bookmark.url) || matches(bookmark.tweetId)) fields.push('URL or post ID');
     bookmark.searchMatch = fields;
   }
 }
@@ -1339,6 +1367,7 @@ async function handleApi(
         return;
       }
       db.run(`UPDATE bookmarks SET categories = ?, primary_category = ? WHERE id = ?`, [category, category, id]);
+      refreshBookmarkSearchRow(db, id);
       saveDb(db, dbPath);
       sendJson(res, { success: true, category, categories: [category], primaryCategory: category });
       return;
@@ -1492,8 +1521,13 @@ async function handleApi(
     const colDeleteMatch = pathname.match(/^\/api\/collections\/([^/]+)$/);
     if (req.method === 'DELETE' && colDeleteMatch) {
       const name = decodeURIComponent(colDeleteMatch[1]);
+      const affectedIds = (db.exec(
+        `SELECT bookmark_id FROM bookmark_collections WHERE collection_name = ?`,
+        [name],
+      )[0]?.values ?? []).map((row) => String(row[0]));
       db.run(`DELETE FROM bookmark_collections WHERE collection_name = ?`, [name]);
       db.run(`DELETE FROM collections WHERE name = ?`, [name]);
+      for (const id of affectedIds) refreshBookmarkSearchRow(db, id);
       saveDb(db, dbPath);
       sendJson(res, { success: true });
       return;
@@ -1510,6 +1544,7 @@ async function handleApi(
         [name, null, now]);
       db.run(`INSERT OR IGNORE INTO bookmark_collections (bookmark_id, collection_name, added_at) VALUES (?, ?, ?)`,
         [id, name, now]);
+      refreshBookmarkSearchRow(db, id);
       saveDb(db, dbPath);
       sendJson(res, { success: true });
       return;
@@ -1520,6 +1555,7 @@ async function handleApi(
       const id = rmColMatch[1];
       const name = decodeURIComponent(rmColMatch[2]);
       db.run(`DELETE FROM bookmark_collections WHERE bookmark_id = ? AND collection_name = ?`, [id, name]);
+      refreshBookmarkSearchRow(db, id);
       saveDb(db, dbPath);
       sendJson(res, { success: true });
       return;
@@ -1701,6 +1737,7 @@ async function handleApi(
     if (req.method === 'POST' && pathname === '/api/auto-classify') {
       const colRows = db.exec(`SELECT name, keywords FROM collections WHERE keywords IS NOT NULL AND keywords != ''`);
       let matched = 0;
+      const changedBookmarkIds = new Set<string>();
       for (const row of (colRows[0]?.values ?? [])) {
         const collectionName = row[0] as string;
         const keywords = (row[1] as string).split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -1713,9 +1750,11 @@ async function handleApi(
           if (keywords.some(kw => text.includes(kw))) {
             db.run(`INSERT OR IGNORE INTO bookmark_collections (bookmark_id, collection_name, added_at) VALUES (?, ?, ?)`, [bid, collectionName, now]);
             matched++;
+            changedBookmarkIds.add(bid);
           }
         }
       }
+      for (const id of changedBookmarkIds) refreshBookmarkSearchRow(db, id);
       if (matched > 0) saveDb(db, dbPath);
       sendJson(res, { matched, classified: matched });
       return;

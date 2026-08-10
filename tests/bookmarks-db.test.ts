@@ -269,10 +269,24 @@ test('search correction repairs adjacent-letter typos', async () => {
   });
 });
 
-test('search index includes quoted posts, notes, and highlights', async () => {
+test('search index includes every meaningful bookmark text surface', async () => {
   const fixtures = [{
     ...FIXTURES[0],
-    quotedTweet: { id: 'quoted-1', text: 'Orbital datacenters have a physics problem' },
+    tweetId: '93821741',
+    url: 'https://x.com/alice/status/93821741',
+    tags: ['spatial-computing'],
+    mediaObjects: [{
+      type: 'photo',
+      url: 'https://img.com/copper.jpg',
+      altText: 'Copper lattice prototype on a workbench',
+    }],
+    quotedTweet: {
+      id: 'quoted-1',
+      text: 'Orbital datacenters have a physics problem',
+      authorHandle: 'orbital_architect',
+      authorName: 'Orbit Architect',
+      url: 'https://x.com/orbital_architect/status/quoted-1',
+    },
   }];
   await withIsolatedDataDir(async () => {
     await buildIndex();
@@ -284,14 +298,33 @@ test('search index includes quoted posts, notes, and highlights', async () => {
         'INSERT INTO bookmark_highlights (bookmark_id, text_fragment, color, created_at) VALUES (?, ?, ?, ?)',
         ['1', 'evidence-backed research', 'yellow', '2026-01-02T00:00:00Z'],
       );
+      db.run(
+        'UPDATE bookmarks SET categories = ?, primary_category = ?, github_urls = ? WHERE id = ?',
+        ['ai-infrastructure,hardware', 'ai-infrastructure', '["https://github.com/example/lattice-lab"]', '1'],
+      );
+      db.run(
+        'INSERT INTO collections (name, color, created_at) VALUES (?, ?, ?)',
+        ['Frontier Systems', null, '2026-01-02T00:00:00Z'],
+      );
+      db.run(
+        'INSERT INTO bookmark_collections (bookmark_id, collection_name, added_at) VALUES (?, ?, ?)',
+        ['1', 'Frontier Systems', '2026-01-02T00:00:00Z'],
+      );
       refreshBookmarkSearchRow(db, '1');
       saveDb(db, dbPath);
     } finally {
       db.close();
     }
     assert.equal((await searchBookmarks({ query: 'orbital physics' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'orbital architect' }))[0]?.id, '1');
     assert.equal((await searchBookmarks({ query: 'permanent sessions' }))[0]?.id, '1');
     assert.equal((await searchBookmarks({ query: 'evidence research' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'copper workbench' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'spatial computing' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'ai infrastructure' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'frontier systems' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: 'lattice lab' }))[0]?.id, '1');
+    assert.equal((await searchBookmarks({ query: '93821741' }))[0]?.id, '1');
   }, fixtures);
 });
 
