@@ -12,16 +12,6 @@ const PAGE_SIZE = 50;
 const CATEGORY_OPTIONS = ['unclassified', 'tool', 'security', 'technique', 'launch', 'research', 'opinion', 'commerce'];
 const LS_LIBRARY_PRESENTATION = 'xb.library.presentation';
 const LS_LIBRARY_MODE = 'xb.library.mode';
-const LS_LIBRARY_SECTION = 'xb.library.section';
-const TODAY_REASON_LABELS = {
-  overdue_review: 'Review due',
-  stale_claim: 'Recheck this claim',
-  surprising_connection: 'Connects active work',
-  active_project: 'Active project',
-  new_capture: 'New signal',
-  forgotten_gem: 'Forgotten gem',
-  worth_revisiting: 'Worth revisiting',
-};
 const INTENT_LABELS = {
   learn: 'Learn',
   build: 'Build',
@@ -108,7 +98,6 @@ export function LibraryView(root) {
     sort: 'desc',
     presentation: localStorage.getItem(LS_LIBRARY_PRESENTATION) || 'refined',
     displayMode: localStorage.getItem(LS_LIBRARY_MODE) || 'reading',
-    section: localStorage.getItem(LS_LIBRARY_SECTION) || 'today',
     offset: 0,
     total: 0,
     libraryTotal: 0,
@@ -160,16 +149,7 @@ export function LibraryView(root) {
         <header class="library-context">
           <div>
             <span class="library-eyebrow">Signal archive</span>
-            <h1 id="lib-section-title">Today</h1>
-          </div>
-          <div class="library-context-actions">
-            <div class="toolbar-segment library-section-switch" id="lib-section" aria-label="Library section">
-              <button class="segment-btn" data-section="today"><span data-icon="sun"></span>Today</button>
-              <button class="segment-btn" data-section="archive"><span data-icon="layers"></span>Archive</button>
-            </div>
-            <button class="icon-btn" id="lib-today-refresh" title="Refresh Today" aria-label="Refresh Today">
-              <span data-icon="refresh-cw"></span>
-            </button>
+            <h1>Research Library</h1>
           </div>
         </header>
         <div class="library-toolbar">
@@ -266,9 +246,6 @@ export function LibraryView(root) {
     presentation: $('#lib-presentation', root),
     presentationLabel: $('#lib-presentation-label', root),
     displayMode: $('#lib-display-mode', root),
-    section: $('#lib-section', root),
-    sectionTitle: $('#lib-section-title', root),
-    todayRefresh: $('#lib-today-refresh', root),
     active: $('#lib-active', root),
     summary: $('#lib-summary', root),
     grabStatus: $('#lib-grab-status', root),
@@ -285,36 +262,6 @@ export function LibraryView(root) {
 
   const shell = $('.library', root);
 
-  function applySection() {
-    const isToday = state.section === 'today';
-    shell.classList.toggle('library-today', isToday);
-    els.sectionTitle.textContent = isToday ? 'Today' : 'Research Library';
-    els.todayRefresh.hidden = !isToday;
-    els.sort.hidden = isToday;
-    els.clear.hidden = isToday;
-    $('#lib-inbox', root).hidden = isToday;
-    $$('.segment-btn', els.section).forEach((btn) => {
-      const active = btn.dataset.section === state.section;
-      btn.classList.toggle('active', active);
-      btn.setAttribute('aria-pressed', String(active));
-    });
-  }
-
-  function setSection(section, options = {}) {
-    const next = section === 'archive' ? 'archive' : 'today';
-    const changed = state.section !== next;
-    state.section = next;
-    localStorage.setItem(LS_LIBRARY_SECTION, next);
-    state.offset = 0;
-    state.search = null;
-    if (changed) {
-      els.search.value = next === 'today' ? '' : state.filters.q;
-    }
-    applySection();
-    renderActive();
-    if (options.load !== false && (changed || options.refresh)) load(false, Boolean(options.refresh));
-  }
-
   function applyPresentation() {
     const presentation = state.presentation === 'classic' ? 'classic' : 'refined';
     const mode = ['reading', 'triage', 'gallery'].includes(state.displayMode) ? state.displayMode : 'reading';
@@ -329,7 +276,6 @@ export function LibraryView(root) {
       btn.classList.toggle('active', btn.dataset.mode === mode);
       btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode));
     });
-    applySection();
   }
 
   function setPresentation(next) {
@@ -447,10 +393,6 @@ export function LibraryView(root) {
   }
 
   function renderActive() {
-    if (state.section === 'today') {
-      els.active.innerHTML = '';
-      return;
-    }
     const chips = [];
     const f = state.filters;
     if (f.q)          chips.push({ k: 'q', label: `“${f.q}”`, icon: 'search' });
@@ -475,7 +417,6 @@ export function LibraryView(root) {
   function setFilter(patch) {
     const next = { ...patch };
     const hasQuery = Object.prototype.hasOwnProperty.call(next, 'q');
-    setSection('archive', { load: false });
     // Toggle behavior: clicking the same rail item clears it.
     Object.keys(next).forEach((k) => {
       if (k !== 'q' && state.filters[k] === next[k] && next[k] !== null) next[k] = null;
@@ -489,7 +430,6 @@ export function LibraryView(root) {
   }
 
   function clearAll() {
-    setSection('archive', { load: false });
     state.filters = { q: '', author: null, category: null, domain: null, collection: null, readStatus: null };
     els.search.value = '';
     state.inbox = false;
@@ -501,34 +441,13 @@ export function LibraryView(root) {
   }
 
   // ── Load bookmarks ────────────────────────────────────────────────────────
-  async function load(append = false, refreshToday = false) {
+  async function load(append = false) {
     listController?.abort();
     const controller = new AbortController();
     listController = controller;
-    const requestedSection = state.section;
     state.loading = true;
     if (!append) renderSkeleton();
     try {
-      if (requestedSection === 'today') {
-        const result = await api.today(7, refreshToday, { signal: controller.signal });
-        if (controller.signal.aborted || state.section !== requestedSection) return;
-        state.total = result.items?.length || 0;
-        state.search = null;
-        state.hasMore = false;
-        state.bookmarks = (result.items || []).map((item) => ({
-          ...item.bookmark,
-          _today: {
-            id: item.id,
-            reason: item.reason,
-            score: item.score,
-            scoreBreakdown: item.scoreBreakdown || [],
-          },
-        }));
-        renderList();
-        renderSummary();
-        if (!append) renderRails();
-        return;
-      }
       const params = {
         q: state.filters.q || undefined,
         author: state.filters.author || undefined,
@@ -542,7 +461,7 @@ export function LibraryView(root) {
         offset: state.offset,
       };
       const { bookmarks, total, search, order } = await api.listBookmarks(params, { signal: controller.signal });
-      if (controller.signal.aborted || state.section !== requestedSection) return;
+      if (controller.signal.aborted) return;
       state.total = total;
       state.search = search || null;
       state.order = order || null;
@@ -562,13 +481,6 @@ export function LibraryView(root) {
   function renderSummary() {
     const total = state.total;
     const shown = state.bookmarks.length;
-    if (state.section === 'today') {
-      els.summary.innerHTML = `
-        <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> signals selected for today</span>
-        <span class="summary-context">Balanced across goals, freshness, and forgotten value</span>
-      `;
-      return;
-    }
     const activeFilter = state.filters.collection || state.filters.category || state.filters.domain || state.filters.author || state.filters.readStatus || '';
     const usesXOrder = state.order?.mode === 'x';
     const unknownOrder = Number(state.order?.unpositioned || 0);
@@ -620,17 +532,13 @@ export function LibraryView(root) {
     if (!state.bookmarks.length) {
       els.list.innerHTML = `
         <div class="empty-state">
-          <span class="empty-icon" data-icon="${state.section === 'today' ? 'check-circle' : 'inbox'}"></span>
-          <h3>${state.section === 'today' ? 'Today is clear' : 'No bookmarks found'}</h3>
-          <p>${state.section === 'today'
-            ? 'Refresh when you want another small set of useful signals.'
-            : state.filters.q
-              ? `No tweet text, quoted post, note, highlight, author, link, or domain matched “${escape(state.filters.q)}”.`
-              : 'Try removing a filter or running Grab.'}</p>
-          ${state.section === 'today' ? '<button class="btn" id="lib-empty-refresh"><span data-icon="refresh-cw"></span>Refresh</button>' : ''}
+          <span class="empty-icon" data-icon="inbox"></span>
+          <h3>No bookmarks found</h3>
+          <p>${state.filters.q
+            ? `No tweet text, quoted post, note, highlight, author, link, or domain matched “${escape(state.filters.q)}”.`
+            : 'Try removing a filter or running Grab.'}</p>
         </div>`;
       renderIcons(els.list);
-      $('#lib-empty-refresh', els.list)?.addEventListener('click', () => load(false, true));
       return;
     }
 
@@ -656,7 +564,6 @@ export function LibraryView(root) {
 
   function renderRow(b, idx) {
     const active = b.id === state.activeId;
-    const today = b._today;
     const mediaItems = mediaItemsFor(b);
     const avatar = b.authorProfileImageUrl
       ? `<img src="${escape(b.authorProfileImageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'bookmark-avatar-fallback',textContent:'${escape((b.authorName || b.authorHandle || '?').slice(0, 1).toUpperCase())}'}))">`
@@ -675,12 +582,8 @@ export function LibraryView(root) {
     const quotedContext = matchedFields.includes('quoted post') && b.quotedText
       ? `<div class="search-match-context"><span>Quoted</span>${highlightSearchText(b.quotedText, searchTokens)}</div>`
       : '';
-    const todayReason = today ? TODAY_REASON_LABELS[today.reason] || 'Worth revisiting' : '';
-    const todayWhy = today
-      ? (today.scoreBreakdown || []).slice(0, 2).map((part) => part.label).join(' · ')
-      : '';
     const row = el('article', {
-      class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}${today ? ' today-row' : ''}`,
+      class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}`,
       dataset: { id: b.id, idx: String(idx) },
       tabindex: '0',
       'aria-label': `Open bookmark by ${b.authorName || b.authorHandle || 'Unknown'}`,
@@ -688,12 +591,6 @@ export function LibraryView(root) {
     row.innerHTML = `
       <div class="bookmark-avatar">${avatar}</div>
       <div class="bookmark-body">
-        ${today ? `
-          <div class="today-reason">
-            <span><span data-icon="sparkles"></span>${escape(todayReason)}</span>
-            <span title="${escape(todayWhy)}">${escape(todayWhy)}</span>
-          </div>
-        ` : ''}
         <div class="bookmark-meta">
           <span class="bookmark-author">${escape(b.authorName || b.authorHandle || 'Unknown')}</span>
           ${b.authorHandle ? `<span class="bookmark-handle">@${escape(b.authorHandle)}</span>` : ''}
@@ -705,13 +602,6 @@ export function LibraryView(root) {
         ${quotedContext}
         ${matchLabel}
         ${tags ? `<div class="bookmark-tags">${tags}</div>` : ''}
-        ${today ? `
-          <div class="today-row-actions" aria-label="Today actions">
-            <button class="btn btn-sm" data-today-action="done"><span data-icon="check"></span>Done</button>
-            <button class="btn btn-sm btn-ghost" data-today-action="snooze"><span data-icon="clock-3"></span>Snooze</button>
-            <button class="icon-btn" data-today-action="dismiss" title="Dismiss from Today" aria-label="Dismiss from Today"><span data-icon="x"></span></button>
-          </div>
-        ` : ''}
       </div>
       ${mediaThumb(mediaItems)}
       <div class="bookmark-row-actions">
@@ -727,24 +617,6 @@ export function LibraryView(root) {
       </div>
     `;
     wireMediaFallbacks(row);
-    row.querySelectorAll('[data-today-action]').forEach((action) => {
-      action.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        action.disabled = true;
-        try {
-          await api.todayAction(today.id, action.dataset.todayAction);
-          state.bookmarks = state.bookmarks.filter((item) => item.id !== b.id);
-          state.total = state.bookmarks.length;
-          if (state.activeId === b.id) clearDetail();
-          renderList();
-          renderSummary();
-          toast(action.dataset.todayAction === 'snooze' ? 'Snoozed for a week' : 'Today updated');
-        } catch (err) {
-          action.disabled = false;
-          toast(`Today update failed: ${err.message}`);
-        }
-      });
-    });
     row.querySelectorAll('[data-row-action]').forEach((action) => {
       action.addEventListener('click', async (event) => {
         event.stopPropagation();
@@ -1444,13 +1316,8 @@ export function LibraryView(root) {
   $$('.segment-btn', els.displayMode).forEach((btn) => {
     btn.addEventListener('click', () => setDisplayMode(btn.dataset.mode));
   });
-  $$('.segment-btn', els.section).forEach((btn) => {
-    btn.addEventListener('click', () => setSection(btn.dataset.section));
-  });
-  els.todayRefresh.addEventListener('click', () => load(false, true));
   els.clear.addEventListener('click', clearAll);
   $('#lib-inbox', root).addEventListener('click', () => {
-    setSection('archive', { load: false });
     state.inbox = !state.inbox;
     $('#lib-inbox', root).classList.toggle('btn-on', state.inbox);
     if (state.inbox) setDisplayMode('triage');

@@ -1,90 +1,4 @@
-/* Knowledge activation workflows: Today, memory drawer, dossiers, and Make. */
-
-.library-context-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.library-section-switch .segment-btn {
-  min-height: 34px;
-  gap: 6px;
-}
-
-.library-section-switch .segment-btn [data-icon] {
-  width: 14px;
-  height: 14px;
-}
-
-.library-today .library-eyebrow {
-  color: var(--desk-teal);
-}
-
-.library-today .results-summary {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  color: var(--fg-3);
-  background: #f2f6f2;
-}
-
-.library-refined .bookmark-row.today-row {
-  grid-template-columns: 38px minmax(0, 1fr) 96px;
-  padding-top: 13px;
-  padding-bottom: 13px;
-  border-bottom-color: #ced9d1;
-}
-
-.today-reason {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 7px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--fg-3);
-}
-
-.today-reason > span:first-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--desk-coral);
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.today-reason [data-icon] {
-  width: 12px;
-  height: 12px;
-}
-
-.today-reason > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.today-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 30px;
-  margin-top: 10px;
-}
-
-.today-row-actions .btn {
-  min-height: 28px;
-  padding: 4px 8px;
-  font-size: 11px;
-}
-
-.today-row-actions .icon-btn {
-  width: 28px;
-  height: 28px;
-}
+/* Knowledge activation workflows: memory drawer, dossiers, and Make. */
 
 .detail-activation {
   display: grid;
@@ -722,10 +636,6 @@
   text-transform: uppercase;
 }
 
-html[data-theme="dark"] .library-today .results-summary {
-  background: #1d251f;
-}
-
 html[data-theme="dark"] .activation-distill {
   background: rgba(50, 166, 142, 0.08);
 }
@@ -760,46 +670,6 @@ html[data-theme="dark"] .ask-made {
 
   .library-eyebrow {
     display: none;
-  }
-
-  .library-section-switch .segment-btn {
-    min-width: 72px;
-  }
-
-  .library-today .library-toolbar {
-    grid-template-columns: minmax(0, 1fr) 44px;
-  }
-
-  .library-today .library-toolbar .search {
-    display: block;
-  }
-
-  .library-today .library-toolbar > :not(.search):not(.library-filter-toggle) {
-    display: none;
-  }
-
-  .library-today .results-summary {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .library-refined .bookmark-row.today-row {
-    grid-template-columns: 34px minmax(0, 1fr);
-  }
-
-  .today-row .bookmark-thumb {
-    display: none;
-  }
-
-  .today-reason {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .today-reason > span:last-child {
-    max-width: 100%;
   }
 
   .dossier-metrics {

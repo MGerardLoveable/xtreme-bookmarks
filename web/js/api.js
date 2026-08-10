@@ -107,18 +107,6 @@ export const api = {
     if (topicId) params.set('topicId', topicId);
     return req(`/api/evidence?${params.toString()}`);
   },
-  today(limit = 7, refresh = false, options = {}) {
-    const q = new URLSearchParams({ limit: String(limit) });
-    if (refresh) q.set('refresh', 'true');
-    return req(`/api/today?${q.toString()}`, { signal: options.signal });
-  },
-  todayAction(id, action, snoozedUntil = null) {
-    return req(`/api/today/${encodeURIComponent(id)}/action`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, snoozedUntil }),
-    });
-  },
   activation(id) {
     return req(`/api/bookmarks/${encodeURIComponent(id)}/activation`);
   },

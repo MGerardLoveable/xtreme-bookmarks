@@ -45,16 +45,12 @@ import {
   brainCyclePendingCountFromDb,
   deleteBookmarkActivationFromDb,
   ensureActivationSchema,
-  generateTodayQueueFromDb,
   getAuthorDossierFromDb,
   getBookmarkActivationDetailsFromDb,
   getBrainCycleStatusFromDb,
-  listTodayQueueFromDb,
   recordActivationEventFromDb,
   removeBookmarkFromProjectFromDb,
   runBrainCycleFromDb,
-  todayKey,
-  updateTodayQueueItemFromDb,
   upsertActivationProfileFromDb,
   type ActivationProfileInput,
   type ProjectItemRole,
@@ -945,26 +941,6 @@ function handleBookmarkById(db: Database, id: string): unknown {
   return bookmark;
 }
 
-function hydrateTodayQueue(
-  db: Database,
-  queue: ReturnType<typeof listTodayQueueFromDb>,
-): Array<Record<string, unknown>> {
-  if (!queue.length) return [];
-  const ids = queue.map((item) => item.bookmarkId);
-  const placeholders = ids.map(() => '?').join(',');
-  const rows = db.exec(
-    `SELECT ${BOOKMARK_COLS} FROM bookmarks b WHERE b.id IN (${placeholders})`,
-    ids,
-  );
-  const bookmarks = (rows[0]?.values ?? []).map(mapRow);
-  attachActivationMetadataFromDb(db, bookmarks);
-  const bookmarkMap = new Map(bookmarks.map((bookmark) => [String(bookmark.id), bookmark]));
-  return queue.flatMap((item) => {
-    const bookmark = bookmarkMap.get(item.bookmarkId);
-    return bookmark ? [{ ...item, bookmark }] : [];
-  });
-}
-
 function handleStats(db: Database): unknown {
   const total = Number(db.exec('SELECT COUNT(*) FROM bookmarks')[0]?.values[0]?.[0] ?? 0);
   const authors = Number(db.exec('SELECT COUNT(DISTINCT author_handle) FROM bookmarks')[0]?.values[0]?.[0] ?? 0);
@@ -1112,65 +1088,6 @@ async function handleApi(
           limit: Number(url.searchParams.get('limit')) || 30,
         }),
       });
-      return;
-    }
-
-    if (req.method === 'GET' && pathname === '/api/today') {
-      const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit')) || 7, 20));
-      const force = url.searchParams.get('refresh') === 'true';
-      const current = listTodayQueueFromDb(db);
-      const shouldGenerate = force || current.length < limit;
-      const queue = shouldGenerate
-        ? generateTodayQueueFromDb(db, { limit, force })
-        : current.slice(0, limit);
-      const queueIds = queue.map((item) => item.bookmarkId);
-      const pendingToday = queueIds.length
-        ? (db.exec(
-          `SELECT b.id
-           FROM bookmarks b
-           LEFT JOIN bookmark_enrichment e ON e.bookmark_id = b.id
-           WHERE b.id IN (${queueIds.map(() => '?').join(',')})
-             AND (
-               e.bookmark_id IS NULL
-               OR (b.source_hash IS NOT NULL AND e.source_hash != b.source_hash)
-             )`,
-          queueIds,
-        )[0]?.values ?? []).map((row) => String(row[0]))
-        : [];
-      if (pendingToday.length) {
-        runBrainCycleFromDb(db, {
-          budget: pendingToday.length,
-          bookmarkIds: pendingToday,
-        });
-      }
-      if (shouldGenerate || pendingToday.length) saveDb(db, dbPath);
-      sendJson(res, {
-        date: todayKey(),
-        items: hydrateTodayQueue(db, queue),
-        generated: shouldGenerate,
-      });
-      return;
-    }
-
-    const todayActionMatch = pathname.match(/^\/api\/today\/(\d+)\/action$/);
-    if (req.method === 'POST' && todayActionMatch) {
-      const bodyText = await parseBody(req);
-      const body = bodyText.trim()
-        ? JSON.parse(bodyText) as { action?: string; snoozedUntil?: string | null }
-        : {};
-      if (!['done', 'dismiss', 'snooze'].includes(body.action || '')) {
-        sendError(res, 'Action must be done, dismiss, or snooze.', 400);
-        return;
-      }
-      const item = updateTodayQueueItemFromDb(
-        db,
-        Number(todayActionMatch[1]),
-        body.action as 'done' | 'dismiss' | 'snooze',
-        body.snoozedUntil,
-      );
-      if (!item) { sendError(res, 'Today item not found.', 404); return; }
-      saveDb(db, dbPath);
-      sendJson(res, { item });
       return;
     }
 
@@ -2069,7 +1986,6 @@ async function handleApi(
         bookmarkIds: body.bookmarkIds,
         force: body.force,
       });
-      generateTodayQueueFromDb(db, { limit: 7 });
       saveDb(db, dbPath);
       sendJson(res, {
         result,
@@ -2818,7 +2734,6 @@ async function autoActivationCycle(
   try {
     const result = runBrainCycleFromDb(state.db, { budget });
     pendingAfter = result.pendingAfter;
-    generateTodayQueueFromDb(state.db, { limit: 7 });
     saveDb(state.db, dbPath);
     succeeded = true;
     console.log(`  Brain Cycle: ${result.summary}`);

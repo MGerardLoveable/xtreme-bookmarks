@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { buildWhere, resolveWebGrabSyncOptions } from '../src/web-server.js';
 import { openDb } from '../src/db.js';
 import { bookmarkSortClause, hasXOrderSql } from '../src/bookmark-order.js';
@@ -68,4 +69,17 @@ test('X order handles opaque decimal positions without 64-bit casts', async () =
   } finally {
     db.close();
   }
+});
+
+test('Library no longer exposes or calls the Today feature', async () => {
+  const [library, api, server] = await Promise.all([
+    readFile(new URL('../web/js/views/library.js', import.meta.url), 'utf8'),
+    readFile(new URL('../web/js/api.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/web-server.ts', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(library, /<h1>Research Library<\/h1>/);
+  assert.doesNotMatch(library, /data-section="today"|api\.today|applySection|lib-today/);
+  assert.doesNotMatch(api, /\/api\/today|todayAction/);
+  assert.doesNotMatch(server, /pathname === '\/api\/today'|todayActionMatch/);
 });
