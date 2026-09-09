@@ -9,7 +9,7 @@ import { exportBookmarksForSyncSeed, updateQuotedTweets, updateBookmarkText } fr
 import { unlink } from 'node:fs/promises';
 
 const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
-const SESSION_COOKIE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_COOKIE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface CachedSessionCookies {
   browserId: string;
@@ -171,6 +171,7 @@ export interface SyncProgress {
 
 export interface SyncResult {
   added: number;
+  changed: number;
   bookmarkedAtRepaired: number;
   totalBookmarks: number;
   bookmarkedAtMissing: number;
@@ -523,6 +524,16 @@ export function parseBookmarksResponse(json: any, now?: string): PageResult {
   return { records, nextCursor };
 }
 
+function isGraphQLAuthenticationError(json: any): boolean {
+  if (!Array.isArray(json?.errors)) return false;
+  return json.errors.some((error: any) => {
+    const code = String(error?.code ?? error?.extensions?.code ?? '');
+    const message = String(error?.message ?? '');
+    return /^(32|89|99|135|215|220)$/.test(code)
+      || /authenticat|authori[sz]|login|logged in|session|credential|csrf/i.test(message);
+  });
+}
+
 const GRAPHQL_FETCH_TIMEOUT_MS = 30_000;
 
 function isAbortError(err: unknown): boolean {
@@ -621,6 +632,13 @@ export async function fetchPageWithRetry(
     } catch {
       throw new Error('GraphQL Bookmarks API returned invalid JSON. No bookmark data was changed.');
     }
+    if (isGraphQLAuthenticationError(json)) {
+      await invalidateCachedSessionCookies();
+      throw new Error(
+        'GraphQL Bookmarks API could not authenticate the browser session. ' +
+        'Open X in that browser, confirm you are logged in, then retry.'
+      );
+    }
     return parseBookmarksResponse(json);
   }
 
@@ -680,18 +698,27 @@ export function mergeRecords(
   incoming: BookmarkRecord[]
 ): { merged: BookmarkRecord[]; added: number } {
   const byId = new Map(existing.map((r) => [r.id, r]));
-  const added = mergeIntoRecordMap(byId, incoming);
+  const { added } = mergeIntoRecordMap(byId, incoming);
   return { merged: sortedRecordsFromMap(byId), added };
 }
 
-function mergeIntoRecordMap(byId: Map<string, BookmarkRecord>, incoming: BookmarkRecord[]): number {
+function mergeIntoRecordMap(
+  byId: Map<string, BookmarkRecord>,
+  incoming: BookmarkRecord[],
+): { added: number; changed: number } {
   let added = 0;
+  let changed = 0;
   for (const record of incoming) {
     const prev = byId.get(record.id);
-    if (!prev) added += 1;
-    byId.set(record.id, mergeBookmarkRecord(prev, record));
+    const merged = mergeBookmarkRecord(prev, record);
+    if (!prev) {
+      added += 1;
+    } else if (JSON.stringify(merged) !== JSON.stringify(prev)) {
+      changed += 1;
+    }
+    byId.set(record.id, merged);
   }
-  return added;
+  return { added, changed };
 }
 
 function sortedRecordsFromMap(byId: Map<string, BookmarkRecord>): BookmarkRecord[] {
@@ -718,6 +745,7 @@ export function formatSyncResult(result: SyncResult): string {
   return [
     'Sync complete.',
     `- bookmarks added: ${result.added}`,
+    `- bookmarks refreshed: ${result.changed}`,
     `- bookmark dates repaired: ${result.bookmarkedAtRepaired}`,
     `- total bookmarks: ${result.totalBookmarks}`,
     `- missing reliable bookmark dates: ${result.bookmarkedAtMissing}`,
@@ -735,7 +763,7 @@ export async function syncBookmarksGraphQL(
   const maxPages = options.maxPages ?? Infinity;
   const delayMs = options.delayMs ?? 600;
   const maxMinutes = options.maxMinutes ?? 30;
-  const stalePageLimit = options.stalePageLimit ?? 3;
+  const stalePageLimit = options.stalePageLimit ?? 10;
   const checkpointEvery = options.checkpointEvery ?? 25;
   const pageSize = Math.max(1, Math.min(options.pageSize ?? 20, 100));
   const abortSignal = options.abortSignal;
@@ -760,6 +788,7 @@ export async function syncBookmarksGraphQL(
   const started = Date.now();
   let page = 0;
   let totalAdded = 0;
+  let totalChanged = 0;
   let stalePages = 0;
   let cursor: string | undefined = options.resumeCursor;
   const allSeenIds: string[] = [];
@@ -801,8 +830,9 @@ export async function syncBookmarksGraphQL(
         break;
       }
 
-      const added = mergeIntoRecordMap(recordsById, result.records);
+      const { added, changed } = mergeIntoRecordMap(recordsById, result.records);
       totalAdded += added;
+      totalChanged += changed;
       result.records.forEach((r) => allSeenIds.push(r.id));
 
       stalePages = added === 0 ? stalePages + 1 : 0;
@@ -824,7 +854,7 @@ export async function syncBookmarksGraphQL(
       }
       // A single familiar bookmark is not a safe boundary: X can interleave
       // familiar and newly saved items. Require a stable multi-page overlap.
-      if (stalePages >= stalePageLimit) {
+      if (incremental && stalePages >= stalePageLimit) {
         stopReason = 'caught up after stable overlap';
         break;
       }
@@ -902,8 +932,9 @@ export async function syncBookmarksGraphQL(
           break;
         }
 
-        const added = mergeIntoRecordMap(recordsById, result.records);
+        const { added, changed } = mergeIntoRecordMap(recordsById, result.records);
         totalAdded += added;
+        totalChanged += changed;
         continueAdded += added;
         result.records.forEach((r) => allSeenIds.push(r.id));
         cursor = result.nextCursor;
@@ -939,21 +970,22 @@ export async function syncBookmarksGraphQL(
       }
     }
   } catch (error) {
-    if (totalAdded === 0) throw error;
+    if (page === 0) throw error;
     interrupted = true;
     const message = error instanceof Error ? error.message : String(error);
     stopReason = `sync interrupted after ${page} page${page === 1 ? '' : 's'}: ${message}`;
   }
 
   const syncedAt = new Date().toISOString();
+  const complete = !interrupted && (stopReason === 'end of bookmarks' || stopReason === 'caught up after stable overlap');
   existing = sortedRecordsFromMap(recordsById);
   const bookmarkedAtMissing = existing.filter((record) => !record.bookmarkedAt).length;
   await writeJsonLines(cachePath, existing);
   await writeJson(metaPath, {
     provider: 'twitter',
     schemaVersion: 1,
-    lastFullSyncAt: incremental ? previousMeta?.lastFullSyncAt : syncedAt,
-    lastIncrementalSyncAt: incremental ? syncedAt : previousMeta?.lastIncrementalSyncAt,
+    lastFullSyncAt: !incremental && complete ? syncedAt : previousMeta?.lastFullSyncAt,
+    lastIncrementalSyncAt: incremental && complete ? syncedAt : previousMeta?.lastIncrementalSyncAt,
     totalBookmarks: existing.length,
   } satisfies BookmarkCacheMeta);
   // Save cursor for resumption if sync stopped before reaching the end
@@ -963,6 +995,7 @@ export async function syncBookmarksGraphQL(
     'no new bookmarks (empty pages)',
     'no new bookmarks (stale)',
     'caught up after stable overlap',
+    'caught up at known X position',
     'pagination cursor repeated',
   ]);
   const savedCursor = terminalReasons.has(stopReason) ? undefined : cursor;
@@ -986,6 +1019,7 @@ export async function syncBookmarksGraphQL(
 
   return {
     added: totalAdded,
+    changed: totalChanged,
     bookmarkedAtRepaired,
     totalBookmarks: existing.length,
     bookmarkedAtMissing,
@@ -993,7 +1027,7 @@ export async function syncBookmarksGraphQL(
     stopReason,
     cachePath,
     statePath,
-    incomplete: interrupted || undefined,
+    incomplete: !complete || undefined,
   };
 }
 

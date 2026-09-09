@@ -13,6 +13,8 @@ import {
   getAuthorDossierFromDb,
   getBookmarkActivationDetailsFromDb,
   getBrainCycleStatusFromDb,
+  queueBookmarkForRecallFromDb,
+  reviewRecallQueueItemFromDb,
   runBrainCycleFromDb,
   todayKey,
   updateTodayQueueItemFromDb,
@@ -123,6 +125,46 @@ test('Today queue uses explainable scoring and supports review actions', async (
 
     const acted = updateTodayQueueItemFromDb(db, queue[0].id, 'done');
     assert.equal(acted?.status, 'done');
+  } finally {
+    db.close();
+  }
+});
+
+test('retrieval practice schedules shorter retries and longer remembered intervals', async () => {
+  const db = await activationFixture();
+  try {
+    ensureActivationSchema(db);
+    upsertActivationProfileFromDb(db, 'a', { importance: 5 });
+    const firstQueue = generateTodayQueueFromDb(db, { date: '2026-08-01', limit: 1, force: true });
+    const now = Date.parse('2026-08-01T12:00:00.000Z');
+    const again = reviewRecallQueueItemFromDb(db, firstQueue[0].id, 'again', now);
+    assert.equal(again?.item.status, 'snoozed');
+    assert.equal(again?.nextReviewAt, '2026-08-02T12:00:00.000Z');
+    assert.equal(reviewRecallQueueItemFromDb(db, firstQueue[0].id, 'remembered', now), null);
+
+    const secondQueue = generateTodayQueueFromDb(db, { date: '2026-08-03', limit: 1, force: true });
+    const remembered = reviewRecallQueueItemFromDb(db, secondQueue[0].id, 'remembered', now);
+    assert.equal(remembered?.item.status, 'done');
+    assert.equal(remembered?.nextReviewAt, '2026-08-15T12:00:00.000Z');
+    assert.equal(getBookmarkActivationDetailsFromDb(db, remembered!.item.bookmarkId).profile?.nextReviewAt, remembered?.nextReviewAt);
+
+    const events = db.exec(`SELECT event_type FROM activation_events WHERE bookmark_id = ? ORDER BY id`, [remembered!.item.bookmarkId]);
+    assert.ok(events[0]?.values.some((row) => row[0] === 'reviewed'));
+  } finally {
+    db.close();
+  }
+});
+
+test('deliberate workspace practice immediately enters the recall queue', async () => {
+  const db = await activationFixture();
+  try {
+    const item = queueBookmarkForRecallFromDb(db, 'a', '2026-08-01');
+    assert.equal(item.bookmarkId, 'a');
+    assert.equal(item.reason, 'deliberate_practice');
+    assert.equal(item.status, 'pending');
+    assert.equal(item.score, 200);
+    assert.equal(item.scoreBreakdown[0].label, 'You chose this idea for practice');
+    assert.ok(db.exec(`SELECT 1 FROM activation_events WHERE bookmark_id = 'a' AND event_type = 'practice_queued'`)[0]?.values.length);
   } finally {
     db.close();
   }

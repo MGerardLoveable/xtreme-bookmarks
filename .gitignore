@@ -36,6 +36,7 @@ tmp-*.log
 oauth-auth.*.log
 
 # Local screenshots/debug artifacts
+audit/**/*.png
 x-login.png
 debug-*.mjs
 debug-*.ts

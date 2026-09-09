@@ -308,7 +308,10 @@ export async function syncTwitterBookmarks(
   let nextToken: string | undefined;
   let pages = 0;
   let reachedEnd = false;
-  const maxPages = mode === 'full' ? 200 : 2;
+  // Manual OAuth fallback must be able to cover large archives. Incremental
+  // runs still stop after a sustained overlap, so the common path stays fast.
+  const maxPages = 1_000;
+  let stalePages = 0;
 
   while (pages < maxPages) {
     const pageResult = await fetchBookmarksPage(token.access_token, me.id, nextToken);
@@ -325,7 +328,8 @@ export async function syncTwitterBookmarks(
       reachedEnd = true;
       break;
     }
-    if (mode === 'incremental' && normalized.every((item) => existingById.has(item.id))) break;
+    stalePages = normalized.every((item) => existingById.has(item.id)) ? stalePages + 1 : 0;
+    if (mode === 'incremental' && stalePages >= 10) break;
     if (typeof options.targetAdds === 'number') {
       const uniqueAddsSoFar = allFetched.filter((item, index, arr) => arr.findIndex((x) => x.id === item.id) === index).filter((item) => !existingById.has(item.id)).length;
       if (uniqueAddsSoFar >= options.targetAdds) break;

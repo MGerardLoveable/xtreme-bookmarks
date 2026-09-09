@@ -72,6 +72,10 @@ export function TopicsView(root) {
   });
 
   return {
+    async openWorkspace(id) {
+      show('overview');
+      await instances.overview.openWorkspace(id);
+    },
     onShow() { show(requestedPanel(), false); },
     onHide() { instances[active]?.onHide?.(); },
     onRoute() { show(requestedPanel(), false); },

@@ -22,8 +22,8 @@ export function bookmarkSortClause(
       CASE WHEN ${hasXOrder} THEN length(${sortIndex}) ELSE 0 END ${normalized},
       CASE WHEN ${hasXOrder} THEN ${sortIndex} ELSE '' END COLLATE BINARY ${normalized},
       CASE
-        WHEN ${bookmarkedAt} GLOB '____-__-__*' THEN ${bookmarkedAt}
-        WHEN ${postedAt} GLOB '____-__-__*' THEN ${postedAt}
+        WHEN ${bookmarkedAt} LIKE '____-__-__%' THEN ${bookmarkedAt}
+        WHEN ${postedAt} LIKE '____-__-__%' THEN ${postedAt}
         ELSE ''
       END ${normalized},
       length(${tweetId}) ${normalized},

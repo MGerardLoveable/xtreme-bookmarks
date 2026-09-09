@@ -1,0 +1,35 @@
+{
+  "intent": "concept",
+  "freshness_mode": "evergreen_ok",
+  "cluster_mode": "workflow",
+  "subqueries": [
+    {
+      "label": "primary",
+      "search_query": "GBrain Garry Tan Karpathy LLM Wiki",
+      "ranking_query": "What are Garry Tan and Andrej Karpathy actually building or proposing for personal knowledge systems, and which ideas are most useful in practice?",
+      "sources": ["reddit", "x", "youtube", "tiktok", "instagram", "hackernews", "polymarket", "github"],
+      "weight": 1.0
+    },
+    {
+      "label": "architecture",
+      "search_query": "GBrain architecture synthesis citations knowledge graph dream cycle",
+      "ranking_query": "Which GBrain architecture choices make a personal knowledge base trustworthy, cumulative, and useful for real questions?",
+      "sources": ["github", "reddit", "youtube", "hackernews", "x"],
+      "weight": 0.85
+    },
+    {
+      "label": "workflow",
+      "search_query": "Karpathy LLM Wiki personal knowledge workflow",
+      "ranking_query": "How does the Karpathy LLM Wiki workflow turn raw sources into maintained, interlinked, human-readable knowledge?",
+      "sources": ["github", "reddit", "youtube", "x"],
+      "weight": 0.8
+    },
+    {
+      "label": "product",
+      "search_query": "AI second brain recall resurfacing actions knowledge management",
+      "ranking_query": "What user workflows make an AI second brain genuinely useful for recall, decisions, projects, learning, and resurfacing old knowledge?",
+      "sources": ["reddit", "youtube", "github", "hackernews", "x"],
+      "weight": 0.7
+    }
+  ]
+}

@@ -19,6 +19,41 @@ xb --help
 
 ## Quick start
 
+### Run the latest GitHub version on another computer
+
+Install Node.js 20+ and Git, then run:
+
+```bash
+git clone https://github.com/MGerardLoveable/xtreme-bookmarks.git
+cd xtreme-bookmarks
+npm ci
+npm run build
+node bin/xb.mjs web
+```
+
+Open `http://127.0.0.1:3848/`. This runs the committed GitHub version;
+the npm-published package may be older.
+
+GitHub contains the application, not your private archive or credentials.
+To preserve bookmarks, notes, workspaces, and history, stop the app and any
+background sync on the original computer, then securely back up its complete
+data directory (`node bin/xb.mjs path` shows the configured location).
+Restore that backup to a private directory on the new computer and set
+`XTREME_BOOKMARKS_DATA_DIR` to that directory before starting the app.
+Keep the original backup until you have verified the restored library and notes.
+Do not merge two independently modified data directories or run both computers
+against a shared live database.
+
+The data directory can include session cookies and OAuth tokens: never commit it
+to Git or share it publicly. Sign into X in a supported browser on the new machine
+and reconnect authentication as needed. Reconfigure any model/provider credentials
+locally; Git does not transfer `.env` files or machine-specific service settings.
+Without a backup, you can sync again, but that will not recover personal notes or
+workspace history. On macOS, install the optional service only after confirming
+the restored data directory using the service instructions below.
+
+### CLI quick start
+
 ```bash
 # 1. Sync your bookmarks
 xb sync
@@ -36,7 +71,7 @@ On first run, `xb sync` uses your chosen browser session and downloads bookmarks
 
 The web app is organized around using saved information, not merely storing it:
 
-- **Today** selects seven explainable signals from active work, review dates, fresh captures, stale claims, and forgotten material. Mark an item done, snooze it, dismiss it, or refresh the queue.
+- **Home** brings together recall, active workspaces, and items needing attention. Recall sessions record your response and schedule the next review; Latest saves opens the archive in saved order.
 - **Archive** searches the actual post text, quoted posts, authors, personal notes, categories, collections, and domains with BM25 ranking and visible match reasons.
 - **Activation** lets you record why you saved something, its intent, importance, status, and next review date.
 - **Brain Cycle** distills source text into a summary, key claim, why it matters, a suggested next action, entities, freshness, and conservative contradiction candidates. Today items and opened items can be distilled on demand, while incremental background passes catch up the archive.

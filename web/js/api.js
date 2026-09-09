@@ -17,6 +17,16 @@ async function req(path, opts = {}) {
 }
 
 export const api = {
+  // Home
+  home(options = {}) { return req('/api/home', { signal: options.signal }); },
+  homeRecallAction(queueId, action, snoozedUntil = null, response = '') {
+    return req(`/api/home/recall/${encodeURIComponent(queueId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, snoozedUntil, response }),
+    });
+  },
+
   // Bookmarks
   listBookmarks(params = {}, options = {}) {
     const q = new URLSearchParams();
@@ -178,11 +188,24 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  updateBrainSpace(id, payload) {
+    return req(`/api/brain/spaces/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
   seedBrainSpace(id) {
     return req(`/api/brain/spaces/${encodeURIComponent(id)}/seed`, { method: 'POST' });
   },
   brainSpaceBookmarks(id) {
     return req(`/api/brain/spaces/${encodeURIComponent(id)}/bookmarks`);
+  },
+  brainSpaceBrief(id) {
+    return req(`/api/brain/spaces/${encodeURIComponent(id)}/brief`);
+  },
+  scheduleBrainPractice(id, bookmarkId) {
+    return req(`/api/brain/spaces/${encodeURIComponent(id)}/practice/${encodeURIComponent(bookmarkId)}`, { method: 'POST' });
   },
   brainSpaceRepos(id) {
     return req(`/api/brain/spaces/${encodeURIComponent(id)}/repos`);
@@ -214,13 +237,28 @@ export const api = {
   },
   createBrainNote(payload) {
     return req('/api/brain/notes', {
-      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', body: JSON.stringify(payload),
+    });
+  },
+  saveUnderstanding(id, payload) {
+    return req(`/api/brain/spaces/${encodeURIComponent(id)}/understanding`, {
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', body: JSON.stringify(payload),
+    });
+  },
+  brainAgentRuns(limit = 20) { return req(`/api/brain/agents/runs?limit=${encodeURIComponent(limit)}`); },
+  brainAgentFindings(limit = 50, open = false, decision = '') {
+    const filter = decision ? `&decision=${encodeURIComponent(decision)}` : '';
+    return req(`/api/brain/agents/findings?limit=${encodeURIComponent(limit)}&open=${open ? 'true' : 'false'}${filter}`);
+  },
+  decideBrainFinding(id, payload) {
+    return req(`/api/brain/agents/findings/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
   },
-  brainAgentRuns(limit = 20) { return req(`/api/brain/agents/runs?limit=${encodeURIComponent(limit)}`); },
-  brainAgentFindings(limit = 50, open = false) { return req(`/api/brain/agents/findings?limit=${encodeURIComponent(limit)}&open=${open ? 'true' : 'false'}`); },
 
   // X account monitor
   xWatchlist(options = {}) { return req('/api/x/watchlist', { signal: options.signal }); },

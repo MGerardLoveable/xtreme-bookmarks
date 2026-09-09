@@ -4,6 +4,7 @@ import { renderIcons, iconSvg } from './icons.js';
 import { api, fmtNumber } from './api.js';
 import { $, $$, toast, debounce } from './util.js';
 
+import { HomeView }        from './views/home.js';
 import { LibraryView }     from './views/library.js';
 import { AskView }         from './views/ask.js';
 import { TopicsView }      from './views/topics.js';
@@ -37,12 +38,14 @@ function toggleDensity() {
 
 // ── Views registry ──────────────────────────────────────────────────────────
 const views = {
+  home: null,
   library: null,
   ask: null,
   topics: null,
   radar: null,
 };
 const viewFactories = {
+  home: HomeView,
   library: LibraryView,
   ask: AskView,
   topics: TopicsView,
@@ -92,7 +95,7 @@ function unmountView(name) {
 
 function switchView(name, { updateHash = true } = {}) {
   name = ROUTE_ALIASES[name] || name;
-  if (!viewFactories[name]) name = 'library';
+  if (!viewFactories[name]) name = 'home';
   if (currentView === name) {
     views[name]?.onRoute?.();
     return;
@@ -133,6 +136,7 @@ function isPaletteOpen() { const o = $('#palette'); return o && !o.hidden; }
 
 function commandItems() {
   return [
+    { section: 'Navigation', title: 'Go to Home',        icon: 'home',           action: () => switchView('home') },
     { section: 'Navigation', title: 'Go to Library',     icon: 'library',        action: () => switchView('library') },
     { section: 'Navigation', title: 'Go to Ask',         icon: 'sparkles',       action: () => switchView('ask') },
     { section: 'Navigation', title: 'Go to Topics',      icon: 'brain-circuit',  action: () => switchView('topics') },
@@ -363,7 +367,7 @@ async function runGrab() {
       if (event === 'done') {
         const doneAdded = typeof data?.added === 'number' ? data.added : addedCount;
         const message = data?.incomplete
-          ? `Saved ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}, but X interrupted the scan. Press Grab again to continue.`
+          ? `Saved ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}. Scan incomplete: ${data.stopReason || 'interrupted'}.`
           : doneAdded
             ? `Added ${fmtNumber(doneAdded)} new bookmark${doneAdded === 1 ? '' : 's'}`
             : `No new bookmarks · ${data?.stopReason || 'complete'}`;
@@ -371,6 +375,7 @@ async function runGrab() {
         toast(message, data?.incomplete ? 8000 : 4500);
         refreshStatusBar();
         if (views.library && views.library.refresh) views.library.refresh();
+        if (currentView === 'home') views.home?.refresh?.();
         clearGrabStatusSoon();
       }
       if (event === 'auth_required') {
@@ -440,7 +445,7 @@ function onKeydown(e) {
   // Leader key `g`
   if (leaderPending) {
     const key = e.key.toLowerCase();
-    const map = { l: 'library', a: 'ask', t: 'topics', r: 'radar' };
+    const map = { h: 'home', l: 'library', a: 'ask', t: 'topics', r: 'radar' };
     if (map[key]) {
       e.preventDefault();
       switchView(map[key]);
@@ -539,7 +544,10 @@ function boot() {
     closeSettings();
     switchView(detail.view || 'library');
     if (detail.filter && views.library?.applyFilter) views.library.applyFilter(detail.filter);
+    if (detail.bookmarkId && views.library?.openBookmark) views.library.openBookmark(detail.bookmarkId);
     if (detail.ask && views.ask?.prefill) views.ask.prefill(detail.ask);
+    if (detail.workspaceId && views.topics?.openWorkspace) views.topics.openWorkspace(detail.workspaceId);
+    if (detail.latestSaved) views.library?.showLatest?.();
   });
 
 
@@ -649,9 +657,9 @@ function boot() {
   setupGlobalNotepad();
 
   // Start
-  const saved = routeFromHash() || localStorage.getItem(LS_VIEW) || 'library';
+  const saved = routeFromHash() || localStorage.getItem(LS_VIEW) || 'home';
   switchView(saved, { updateHash: !location.hash });
-  window.addEventListener('hashchange', () => switchView(routeFromHash() || 'library', { updateHash: false }));
+  window.addEventListener('hashchange', () => switchView(routeFromHash() || 'home', { updateHash: false }));
   refreshStatusBar();
   setInterval(refreshStatusBar, 60_000);
 }

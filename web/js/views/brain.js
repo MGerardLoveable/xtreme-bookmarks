@@ -42,6 +42,9 @@ export function BrainView(root) {
     selectedTopicId: null,
     bookmarks: [],
     projects: [],
+    brief: null,
+    findings: null,
+    findingFilter: 'open',
     busyWorkflow: null,
   };
   let loadVersion = 0;
@@ -146,7 +149,14 @@ export function BrainView(root) {
         </section>
 
         <section class="brain-updates-panel">
-          <div class="brain-section-title">Updates and weak spots</div>
+          <div class="brain-updates-heading">
+            <div class="brain-section-title">Review queue</div>
+            <div class="brain-finding-filters" role="tablist" aria-label="Update history">
+              <button type="button" data-finding-filter="open" role="tab">Open</button>
+              <button type="button" data-finding-filter="accepted" role="tab">Accepted</button>
+              <button type="button" data-finding-filter="dismissed" role="tab">Dismissed</button>
+            </div>
+          </div>
           <div id="brain-findings" class="brain-update-list"><div class="placeholder">Loading...</div></div>
         </section>
       </div>
@@ -245,7 +255,8 @@ export function BrainView(root) {
 
   function renderDashboard() {
     const spaces = state.dashboard?.spaces || [];
-    const findings = state.dashboard?.findings || [];
+    const findings = state.findings ?? state.dashboard?.findings ?? [];
+    const openFindingCount = spaces.reduce((total, space) => total + Number(space.openFindings || 0), 0);
     const repoCount = state.dashboard?.repoCount || 0;
     const stale = state.dashboard?.staleSpaces || [];
     const memory = state.dashboard?.memory || {};
@@ -256,7 +267,7 @@ export function BrainView(root) {
     $('#brain-metrics', root).innerHTML = [
       { label: 'Workspaces', value: spaces.length, icon: 'folder-kanban' },
       { label: 'Projects watched', value: repoCount, icon: 'github' },
-      { label: 'Open updates', value: findings.length, icon: 'bell' },
+      { label: 'Open updates', value: openFindingCount, icon: 'bell' },
       { label: 'Memory cards', value: memory.artifactCount || 0, icon: 'layers' },
     ].map((item) => `
       <div class="brain-metric">
@@ -270,13 +281,13 @@ export function BrainView(root) {
       ? 'Create one workspace. AI Research is already filled in for you.'
       : (memory.artifactCount || 0) === 0
         ? 'Run Clean up new saves to create memory cards from your existing sources.'
-        : findings.length > 0
+        : openFindingCount > 0
           ? 'Review open updates and weak spots before they get buried.'
           : stale.length > 0
             ? 'Some topics need a fresh watchlist update.'
             : 'Your workspaces have source-backed memory and are ready to ask.';
     $('#brain-next-step', root).innerHTML = `
-      <span data-icon="${spaces.length === 0 ? 'arrow-up-right' : findings.length > 0 ? 'bell' : 'check-circle-2'}"></span>
+      <span data-icon="${spaces.length === 0 ? 'arrow-up-right' : openFindingCount > 0 ? 'bell' : 'check-circle-2'}"></span>
       <span>${escape(nextStep)}</span>
     `;
 
@@ -297,21 +308,45 @@ export function BrainView(root) {
       </div>
     `;
 
+    root.querySelectorAll('[data-finding-filter]').forEach((button) => {
+      const active = button.dataset.findingFilter === state.findingFilter;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
     $('#brain-findings', root).innerHTML = findings.length ? findings.map((finding) => `
-      <article class="brain-update-card ${finding.severity === 'warning' ? 'warning' : ''}">
-        <div class="brain-update-type">${escape(labelAgent(finding.agentType))}</div>
+      <article class="brain-update-card ${finding.severity === 'warning' ? 'warning' : ''}" data-finding-id="${escape(finding.id)}">
+        <div class="brain-update-type">${finding.resolved ? escape(finding.decision === 'accepted' ? 'Accepted into memory' : 'Dismissed') : escape(labelAgent(finding.agentType))}</div>
         <h3>${escape(finding.title)}</h3>
         <p>${escape((finding.detail || '').slice(0, 220))}</p>
+        ${finding.resolved && finding.decisionNote ? `<p class="brain-decision-note"><strong>Your note</strong>${escape(finding.decisionNote)}</p>` : ''}
         <div class="brain-update-footer">
-          <span>${escape(finding.spaceName || finding.spaceId)}</span>
-          ${finding.url ? `<a class="btn btn-sm btn-ghost" href="${escape(finding.url)}" target="_blank" rel="noopener"><span data-icon="external-link"></span>Open</a>` : ''}
+          <span>${escape(finding.spaceName || finding.spaceId)}${finding.decidedAt ? ` · ${escape(fmtRelativeTime(finding.decidedAt))} ago` : ''}</span>
+          <div class="brain-update-actions">
+            ${finding.url ? `<a class="icon-btn" href="${escape(finding.url)}" target="_blank" rel="noopener" title="Open source" aria-label="Open source"><span data-icon="external-link"></span></a>` : ''}
+            ${finding.resolved ? '' : `
+              <button class="btn btn-sm btn-ghost" type="button" data-finding-edit><span data-icon="edit-3"></span>Edit</button>
+              <button class="btn btn-sm" type="button" data-finding-quick="dismissed"><span data-icon="x"></span>Dismiss</button>
+              <button class="btn btn-sm btn-primary" type="button" data-finding-quick="accepted"><span data-icon="check"></span>Accept</button>
+            `}
+          </div>
         </div>
+        ${finding.resolved ? '' : `<form class="brain-finding-review" hidden>
+          <label><span>Title</span><input class="input" name="title" value="${escape(finding.title)}" required></label>
+          <label><span>What should this workspace remember?</span><textarea class="input" name="detail" rows="4" required>${escape(finding.detail || '')}</textarea></label>
+          <label><span>Private review note <em>optional</em></span><textarea class="input" name="note" rows="2" placeholder="Why this matters, what to verify, or how you expect to use it"></textarea></label>
+          <div class="brain-finding-review-actions">
+            <button class="btn btn-sm btn-ghost" type="button" data-finding-cancel>Cancel</button>
+            <button class="btn btn-sm" type="submit" data-finding-decision="dismissed"><span data-icon="x"></span>Dismiss</button>
+            <button class="btn btn-sm btn-primary" type="submit" data-finding-decision="accepted"><span data-icon="check"></span>Accept into memory</button>
+          </div>
+        </form>`}
       </article>
     `).join('') : `
       <div class="brain-empty compact">
         <span data-icon="check-circle-2"></span>
-        <strong>No open updates</strong>
-        <p>Run Review or Fresh update when you want a new scan.</p>
+        <strong>No ${escape(state.findingFilter)} updates</strong>
+        <p>${state.findingFilter === 'open' ? 'Run Review or Fresh update when you want a new scan.' : 'Reviewed updates will remain available here as a durable decision history.'}</p>
       </div>
     `;
 
@@ -338,13 +373,15 @@ export function BrainView(root) {
 
     $('#brain-detail', root).innerHTML = '<div class="placeholder">Loading topic...</div>';
     try {
-      const [{ bookmarks }, { repos }] = await Promise.all([
+      const [{ bookmarks }, { repos }, { brief }] = await Promise.all([
         api.brainSpaceBookmarks(topic.id),
         api.brainSpaceRepos(topic.id),
+        api.brainSpaceBrief(topic.id),
       ]);
       if (version !== detailVersion || state.selectedTopicId !== topic.id) return;
       state.bookmarks = bookmarks || [];
       state.projects = repos || [];
+      state.brief = brief || null;
       renderDetail(topic);
     } catch (err) {
       $('#brain-detail', root).innerHTML = `<div class="placeholder">Failed: ${escape(err.message)}</div>`;
@@ -352,7 +389,22 @@ export function BrainView(root) {
   }
 
   function renderDetail(topic) {
-    const recentMemory = (state.dashboard?.memory?.recentArtifacts || []).filter((item) => item.spaceId === topic.id).slice(0, 5);
+    const brief = state.brief || {};
+    const keyIdeas = brief.keyIdeas || [];
+    const practice = brief.practice || null;
+    const nextActions = brief.nextActions || [];
+    const openQuestions = brief.openQuestions || [];
+    const recentMemory = brief.recentEvidence || [];
+    const history = brief.understanding || [];
+    const understanding = history[0] || {};
+    const understandingFields = [
+      ['conclusion', 'My current conclusion', 'What do you believe, and why?'],
+      ['challenge', 'What would change my mind?', 'A counterexample, missing evidence, or an assumption to test'],
+      ['nextStep', 'Next experiment', 'One concrete action you can take'],
+      ['successMeasure', 'Success looks like', 'What observable result will tell you it worked?'],
+      ['outcome', 'What actually happened', 'Results, surprises, and what you would do differently'],
+    ];
+    const evidenceIds = [...new Set([...keyIdeas.map(idea => idea.bookmarkId), ...(understanding.evidenceIds || [])])];
     $('#brain-detail', root).innerHTML = `
       <div class="brain-topic-detail-header">
         <div>
@@ -361,6 +413,7 @@ export function BrainView(root) {
           <p>${escape(topic.focusQuestion || topic.description || (topic.keywords || []).join(', ') || 'This workspace is ready for bookmarks, notes, and watched projects.')}</p>
         </div>
         <div class="brain-topic-actions">
+          <button class="btn" id="topic-ask"><span data-icon="sparkles"></span>Ask this workspace</button>
           <button class="btn" id="topic-seed"><span data-icon="wand-sparkles"></span>Gather bookmarks</button>
           <button class="btn btn-primary" data-workflow-topic="watch"><span data-icon="radar"></span>Fresh update</button>
         </div>
@@ -371,6 +424,85 @@ export function BrainView(root) {
         <button class="btn btn-sm" data-workflow-topic="connect"><span data-icon="network"></span>Find connections</button>
         <button class="btn btn-sm" data-workflow-topic="review"><span data-icon="clock-3"></span>Review topic</button>
         <button class="btn btn-sm" data-workflow-topic="publish"><span data-icon="folder"></span>Update page</button>
+      </div>
+
+      <section class="brain-current-picture">
+        <div class="brain-section-title">Current picture</div>
+        <p>${escape(brief.overview || topic.focusQuestion || topic.description || 'Gather sources to build a current picture.')}</p>
+        <form id="topic-focus-form" class="brain-focus-form">
+          <input class="input" name="focusQuestion" value="${escape(topic.focusQuestion || '')}" placeholder="What should this workspace help you answer or decide?">
+          <button class="btn btn-sm" type="submit"><span data-icon="check"></span>Save focus</button>
+        </form>
+      </section>
+
+      <section class="brain-understanding" aria-labelledby="understanding-title">
+        <header><h3 id="understanding-title">Working understanding</h3><span>${history.length ? `Updated ${escape(new Date(understanding.savedAt).toLocaleDateString())}` : 'Your perspective'}</span></header>
+        <form id="understanding-form">
+          <div class="understanding-fields">${understandingFields.map(([name, label, placeholder]) => `
+            <label><span>${label}</span><textarea class="input" name="${name}" rows="3" maxlength="6000" placeholder="${placeholder}">${escape(understanding[name] || '')}</textarea></label>
+          `).join('')}</div>
+          <fieldset class="understanding-evidence"><legend>Supporting or challenging evidence</legend>
+            ${evidenceIds.length ? evidenceIds.map(id => {
+              const idea = keyIdeas.find(item => item.bookmarkId === id);
+              return `<label><input type="checkbox" name="evidenceIds" value="${escape(id)}" ${(understanding.evidenceIds || []).includes(id) ? 'checked' : ''}><span>${escape(idea?.title || `Saved source ${id}`)}</span><button type="button" class="icon-btn" data-open-bookmark="${escape(id)}" aria-label="Open evidence" title="Open evidence"><span data-icon="external-link"></span></button></label>`;
+            }).join('') : '<p>No workspace sources yet.</p>'}
+          </fieldset>
+          <footer><button class="btn btn-primary" type="submit"><span data-icon="save"></span>Save understanding</button><span role="status" id="understanding-status"></span></footer>
+        </form>
+        ${history.length ? `<details class="understanding-history"><summary>Thinking history (${history.length}${history.length === 20 ? ' most recent' : ''})</summary>${history.map(record => `<article><time>${escape(new Date(record.savedAt).toLocaleString())}</time>${understandingFields.filter(([name]) => record[name]).map(([name,label]) => `<h4>${label}</h4><p>${escape(record[name])}</p>`).join('')}<small>${record.evidenceIds.length} linked sources</small></article>`).join('')}</details>` : ''}
+      </section>
+
+      ${practice ? `<section class="brain-study-strip" data-study-bookmark="${escape(practice.bookmarkId)}">
+        <div class="brain-study-copy">
+          <div class="brain-section-title">Recall and apply</div>
+          <h3>${escape(practice.cue)}</h3>
+          <textarea class="input brain-study-response" rows="3" placeholder="Explain it from memory in 1–3 sentences"></textarea>
+        </div>
+        <div class="brain-study-actions">
+          <button class="btn" type="button" data-study-reveal><span data-icon="eye"></span>Reveal answer</button>
+          <button class="btn btn-primary" type="button" data-study-schedule><span data-icon="brain-circuit"></span>Practice on Home</button>
+        </div>
+        <div class="brain-study-answer" data-study-answer hidden>
+          <strong>Source-backed answer</strong>
+          <p>${escape(practice.answer)}</p>
+          ${practice.whyItMatters ? `<small><b>Why it matters</b>${escape(practice.whyItMatters)}</small>` : ''}
+          <div class="brain-study-application"><span data-icon="arrow-right"></span><span>${escape(practice.applicationPrompt)}</span></div>
+          <button class="btn btn-sm btn-ghost" type="button" data-open-bookmark="${escape(practice.bookmarkId)}"><span data-icon="external-link"></span>Open source</button>
+        </div>
+      </section>` : ''}
+
+      <div class="brain-brief-grid">
+        <section>
+          <div class="brain-section-title">What you know</div>
+          <div class="brain-idea-list">
+            ${keyIdeas.length ? keyIdeas.map((idea, index) => `
+              <button class="brain-idea-row" type="button" data-open-bookmark="${escape(idea.bookmarkId)}">
+                <span class="brain-idea-index">${String(index + 1).padStart(2, '0')}</span>
+                <span><strong>${escape(idea.title)}</strong><small>${escape(idea.whyItMatters || idea.author ? `${idea.whyItMatters || ''}${idea.whyItMatters && idea.author ? ' · ' : ''}${idea.author ? '@' + idea.author.replace(/^@/, '') : ''}` : idea.detail.slice(0, 160))}</small></span>
+              </button>
+            `).join('') : '<div class="placeholder">Run Clean up saves to distill the strongest ideas.</div>'}
+          </div>
+        </section>
+        <section>
+          <div class="brain-section-title">Next moves</div>
+          <div class="brain-action-list">
+            ${nextActions.length ? nextActions.map((item) => `
+              <button class="brain-action-row" type="button" data-open-bookmark="${escape(item.bookmarkId)}">
+                <span data-icon="arrow-right"></span><span><strong>${escape(item.action)}</strong><small>Based on ${escape(item.sourceTitle)}</small></span>
+              </button>
+            `).join('') : '<div class="placeholder">No source-backed actions yet. Ask this workspace for a practical plan.</div>'}
+          </div>
+        </section>
+        <section>
+          <div class="brain-section-title">Needs review</div>
+          <div class="brain-question-list">
+            ${openQuestions.length ? openQuestions.map((item) => `
+              <${item.url ? `a href="${escape(item.url)}" target="_blank" rel="noopener"` : 'div'} class="brain-question-row ${escape(item.severity)}">
+                <strong>${escape(item.title)}</strong><small>${escape(item.detail.slice(0, 180))}</small>
+              </${item.url ? 'a' : 'div'}>
+            `).join('') : '<div class="brain-clear-state"><span data-icon="check-circle-2"></span><span>No open gaps have been flagged.</span></div>'}
+          </div>
+        </section>
       </div>
 
       <form id="topic-project-form" class="brain-project-form">
@@ -396,14 +528,34 @@ export function BrainView(root) {
         </section>
 
         <section>
-          <div class="brain-section-title">Watched projects</div>
-          <div class="brain-mini-list">
+          <div class="brain-section-title">Project intelligence</div>
+          <div class="brain-mini-list brain-project-list">
             ${state.projects.length ? state.projects.map((project) => `
-              <div class="brain-mini-row">
-                <span data-icon="github"></span>
-                <strong>${escape(project.repo)}</strong>
-                <small>${escape(project.lastCheckedAt ? `checked ${fmtRelativeTime(project.lastCheckedAt)} ago` : 'new')}</small>
-              </div>
+              <article class="brain-project-card">
+                <div class="brain-project-heading">
+                  <span data-icon="github"></span>
+                  <div>
+                    <a href="${escape(project.htmlUrl || `https://github.com/${project.repo}`)}" target="_blank" rel="noopener"><strong>${escape(project.repo)}</strong></a>
+                    <small>${escape(project.lastCheckedAt ? `Checked ${fmtRelativeTime(project.lastCheckedAt)} ago` : 'Waiting for first update')}</small>
+                  </div>
+                  ${project.stars ? `<span class="brain-project-stat"><span data-icon="star"></span>${Number(project.stars).toLocaleString()}</span>` : ''}
+                </div>
+                <p>${escape(project.description || 'Run Fresh update to build a plain-English project brief.')}</p>
+                ${project.topics?.length ? `<div class="brain-project-topics">${project.topics.slice(0, 5).map((topic) => `<span>${escape(topic)}</span>`).join('')}</div>` : ''}
+                ${project.latestCommitTitle || project.latestReleaseName ? `
+                  <div class="brain-project-latest">
+                    <span>${escape(project.latestReleaseName ? 'Latest release' : 'Latest change')}</span>
+                    <a href="${escape(project.latestReleaseUrl || project.latestCommitUrl || project.htmlUrl)}" target="_blank" rel="noopener">${escape(project.latestReleaseName || project.latestCommitTitle)}</a>
+                    ${project.latestCommitAt && !project.latestReleaseName ? `<small>${escape(project.latestCommitAuthor || 'Contributor')} · ${escape(fmtRelativeTime(project.latestCommitAt))} ago</small>` : ''}
+                  </div>
+                ` : ''}
+                ${project.recommendedAction ? `
+                  <div class="brain-project-action">
+                    <span data-icon="arrow-right-circle"></span>
+                    <div><small>Next useful move</small><strong>${escape(project.recommendedAction)}</strong></div>
+                  </div>
+                ` : ''}
+              </article>
             `).join('') : '<div class="placeholder">No projects yet.</div>'}
           </div>
         </section>
@@ -421,6 +573,77 @@ export function BrainView(root) {
         </section>
       </div>
     `;
+
+    $('#topic-ask', root).addEventListener('click', () => {
+      const question = topic.focusQuestion
+        ? `Using only my ${topic.name} workspace, help me answer: ${topic.focusQuestion}`
+        : `Synthesize my ${topic.name} workspace. Explain what I know, what is uncertain, and the highest-value next actions.`;
+      document.dispatchEvent(new CustomEvent('xb:navigate', {
+        detail: { view: 'ask', ask: { question, topicId: topic.id } },
+      }));
+    });
+
+    root.querySelectorAll('[data-open-bookmark]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.dispatchEvent(new CustomEvent('xb:navigate', {
+          detail: { view: 'library', bookmarkId: button.dataset.openBookmark },
+        }));
+      });
+    });
+
+    const studyStrip = root.querySelector('[data-study-bookmark]');
+    studyStrip?.querySelector('[data-study-reveal]')?.addEventListener('click', (event) => {
+      const answer = studyStrip.querySelector('[data-study-answer]');
+      answer.hidden = false;
+      event.currentTarget.hidden = true;
+    });
+    studyStrip?.querySelector('[data-study-schedule]')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        await api.scheduleBrainPractice(topic.id, studyStrip.dataset.studyBookmark);
+        button.innerHTML = '<span data-icon="check"></span>Added to Home';
+        toast('Added to your recall practice');
+        renderIcons(button);
+      } catch (err) {
+        button.disabled = false;
+        toast(`Could not schedule practice: ${err.message}`);
+      }
+    });
+
+    $('#understanding-form', root).addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('[type="submit"]');
+      if (button.disabled) return;
+      const values = new FormData(form);
+      const payload = Object.fromEntries(understandingFields.map(([name]) => [name, String(values.get(name) || '')]));
+      payload.evidenceIds = values.getAll('evidenceIds');
+      button.disabled = true;
+      try {
+        await api.saveUnderstanding(topic.id, payload);
+        toast('Understanding saved with its evidence');
+        await loadDetail();
+      } catch (err) {
+        $('#understanding-status', root).textContent = err.message;
+        button.disabled = false;
+      }
+    });
+
+    $('#topic-focus-form', root).addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const focusQuestion = String(new FormData(event.currentTarget).get('focusQuestion') || '').trim();
+      try {
+        const { space } = await api.updateBrainSpace(topic.id, { focusQuestion });
+        const index = state.dashboard.spaces.findIndex((item) => item.id === topic.id);
+        if (index >= 0) state.dashboard.spaces[index] = space;
+        toast(focusQuestion ? 'Workspace focus saved' : 'Workspace focus cleared');
+        renderDashboard();
+        await loadDetail();
+      } catch (err) {
+        toast(`Could not save focus: ${err.message}`);
+      }
+    });
 
     $('#topic-seed', root).addEventListener('click', async () => {
       toast('Gathering matching bookmarks...');
@@ -512,13 +735,15 @@ export function BrainView(root) {
   async function load() {
     const version = ++loadVersion;
     try {
-      const [dashboard, engine] = await Promise.all([
+      const [dashboard, engine, filteredFindings] = await Promise.all([
         api.brainDashboard(),
         api.brainEngine().catch(() => null),
+        api.brainAgentFindings(50, state.findingFilter === 'open', state.findingFilter),
       ]);
       if (version !== loadVersion) return;
       state.dashboard = dashboard;
       state.engine = engine;
+      state.findings = filteredFindings.findings || [];
       if (!state.selectedTopicId && dashboard.spaces?.length) state.selectedTopicId = dashboard.spaces[0].id;
       if (state.selectedTopicId && !topicById(state.selectedTopicId)) state.selectedTopicId = dashboard.spaces?.[0]?.id || null;
       renderStarters();
@@ -531,6 +756,63 @@ export function BrainView(root) {
   }
 
   $('#brain-refresh', root).addEventListener('click', load);
+
+  root.querySelector('.brain-finding-filters').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-finding-filter]');
+    if (!button || button.dataset.findingFilter === state.findingFilter) return;
+    state.findingFilter = button.dataset.findingFilter;
+    state.findings = [];
+    $('#brain-findings', root).innerHTML = '<div class="placeholder">Loading update history...</div>';
+    await load();
+  });
+
+  $('#brain-findings', root).addEventListener('click', async (event) => {
+    const card = event.target.closest('[data-finding-id]');
+    if (!card) return;
+    const form = card.querySelector('.brain-finding-review');
+    if (event.target.closest('[data-finding-edit]')) {
+      form.hidden = false;
+      form.querySelector('[name="title"]').focus();
+      return;
+    }
+    if (event.target.closest('[data-finding-cancel]')) {
+      form.hidden = true;
+      return;
+    }
+    const quick = event.target.closest('[data-finding-quick]');
+    if (!quick) return;
+    await reviewFinding(card, { decision: quick.dataset.findingQuick });
+  });
+
+  $('#brain-findings', root).addEventListener('submit', async (event) => {
+    const form = event.target.closest('.brain-finding-review');
+    if (!form) return;
+    event.preventDefault();
+    const card = form.closest('[data-finding-id]');
+    const data = new FormData(form);
+    await reviewFinding(card, {
+      decision: event.submitter?.dataset.findingDecision,
+      title: String(data.get('title') || '').trim(),
+      detail: String(data.get('detail') || '').trim(),
+      note: String(data.get('note') || '').trim(),
+    });
+  });
+
+  async function reviewFinding(card, payload) {
+    if (!card || !payload.decision) return;
+    card.classList.add('is-busy');
+    try {
+      const result = await api.decideBrainFinding(card.dataset.findingId, payload);
+      const accepted = payload.decision === 'accepted';
+      toast(accepted
+        ? (result.watchedRepo ? `Added ${result.watchedRepo} to workspace memory and watchlist` : 'Accepted into workspace memory')
+        : 'Dismissed from the review queue');
+      await load();
+    } catch (err) {
+      card.classList.remove('is-busy');
+      toast(`Could not review update: ${err.message}`);
+    }
+  }
 
   $('#brain-create', root).addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -566,6 +848,10 @@ export function BrainView(root) {
 
   let loaded = false;
   return {
+    async openWorkspace(id) {
+      state.selectedTopicId = id;
+      await load();
+    },
     onShow() {
       if (loaded) return;
       loaded = true;

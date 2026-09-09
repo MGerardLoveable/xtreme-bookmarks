@@ -59,6 +59,39 @@ export interface BrainRepo {
   lastCheckedAt: string | null;
   lastReleaseId: string | null;
   lastCommitSha: string | null;
+  description: string;
+  htmlUrl: string;
+  homepage: string;
+  stars: number;
+  openIssues: number;
+  defaultBranch: string;
+  topics: string[];
+  readmeExcerpt: string;
+  latestReleaseName: string;
+  latestReleaseUrl: string;
+  latestCommitTitle: string;
+  latestCommitUrl: string;
+  latestCommitAuthor: string;
+  latestCommitAt: string | null;
+  recommendedAction: string;
+}
+
+export interface BrainRepoIntelligence {
+  description: string;
+  htmlUrl: string;
+  homepage: string;
+  stars: number;
+  openIssues: number;
+  defaultBranch: string;
+  topics: string[];
+  readmeExcerpt: string;
+  latestReleaseName: string;
+  latestReleaseUrl: string;
+  latestCommitTitle: string;
+  latestCommitUrl: string;
+  latestCommitAuthor: string;
+  latestCommitAt: string | null;
+  recommendedAction: string;
 }
 
 export interface BrainFinding {
@@ -74,6 +107,16 @@ export interface BrainFinding {
   severity: 'info' | 'warning' | 'error';
   createdAt: string;
   resolved: boolean;
+  decision: 'open' | 'accepted' | 'dismissed';
+  decisionNote: string;
+  decidedAt: string | null;
+}
+
+export interface BrainFindingDecisionInput {
+  decision: 'accepted' | 'dismissed';
+  title?: string;
+  detail?: string;
+  note?: string;
 }
 
 export interface BrainRun {
@@ -133,6 +176,73 @@ export interface BrainMemoryOverview {
   timelineCount: number;
   recentArtifacts: BrainArtifact[];
   topEntities: Array<{ name: string; kind: string; mentions: number }>;
+}
+
+export interface BrainWorkspaceBrief {
+  understanding: WorkingUnderstanding[];
+  overview: string;
+  keyIdeas: Array<{
+    bookmarkId: string;
+    title: string;
+    detail: string;
+    whyItMatters: string;
+    author: string;
+    url: string | null;
+  }>;
+  nextActions: Array<{
+    action: string;
+    bookmarkId: string;
+    sourceTitle: string;
+    url: string | null;
+  }>;
+  openQuestions: Array<{
+    title: string;
+    detail: string;
+    severity: BrainFinding['severity'];
+    url: string | null;
+  }>;
+  practice: {
+    bookmarkId: string;
+    cue: string;
+    answer: string;
+    applicationPrompt: string;
+    whyItMatters: string;
+    author: string;
+    url: string | null;
+  } | null;
+  recentEvidence: BrainArtifact[];
+}
+
+export function diversifyBrainIdeas<T extends { author: string }>(
+  ideas: T[],
+  limit = 6,
+  maxPerAuthor = 2,
+): T[] {
+  const counts = new Map<string, number>();
+  const selected: T[] = [];
+  for (const idea of ideas) {
+    const author = idea.author.trim().toLowerCase().replace(/^@/, '') || 'unknown';
+    if ((counts.get(author) ?? 0) >= maxPerAuthor) continue;
+    selected.push(idea);
+    counts.set(author, (counts.get(author) ?? 0) + 1);
+    if (selected.length >= limit) break;
+  }
+  if (selected.length < limit) {
+    for (const idea of ideas) {
+      if (selected.includes(idea)) continue;
+      selected.push(idea);
+      if (selected.length >= limit) break;
+    }
+  }
+  return selected;
+}
+
+function displayBrainTerm(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'gbrain') return 'GBrain';
+  if (normalized === 'gstack') return 'GStack';
+  if (normalized === 'autoresearch') return 'Autoresearch';
+  return value.trim().replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 export interface BrainWorkflow {
@@ -388,6 +498,25 @@ export function initBrainSchema(db: Database): void {
     last_commit_sha TEXT,
     PRIMARY KEY (space_id, repo)
   )`);
+  for (const column of [
+    `description TEXT NOT NULL DEFAULT ''`,
+    `html_url TEXT NOT NULL DEFAULT ''`,
+    `homepage TEXT NOT NULL DEFAULT ''`,
+    `stars INTEGER NOT NULL DEFAULT 0`,
+    `open_issues INTEGER NOT NULL DEFAULT 0`,
+    `default_branch TEXT NOT NULL DEFAULT ''`,
+    `topics_json TEXT NOT NULL DEFAULT '[]'`,
+    `readme_excerpt TEXT NOT NULL DEFAULT ''`,
+    `latest_release_name TEXT NOT NULL DEFAULT ''`,
+    `latest_release_url TEXT NOT NULL DEFAULT ''`,
+    `latest_commit_title TEXT NOT NULL DEFAULT ''`,
+    `latest_commit_url TEXT NOT NULL DEFAULT ''`,
+    `latest_commit_author TEXT NOT NULL DEFAULT ''`,
+    `latest_commit_at TEXT`,
+    `recommended_action TEXT NOT NULL DEFAULT ''`,
+  ]) {
+    try { db.run(`ALTER TABLE brain_space_repos ADD COLUMN ${column}`); } catch {}
+  }
   db.run(`CREATE TABLE IF NOT EXISTS brain_agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     space_id TEXT,
@@ -411,6 +540,10 @@ export function initBrainSchema(db: Database): void {
     created_at TEXT NOT NULL,
     resolved INTEGER NOT NULL DEFAULT 0
   )`);
+  try { db.run(`ALTER TABLE brain_agent_findings ADD COLUMN decision TEXT NOT NULL DEFAULT 'open'`); } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE brain_agent_findings ADD COLUMN decision_note TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE brain_agent_findings ADD COLUMN decided_at TEXT`); } catch { /* already exists */ }
+  db.run(`UPDATE brain_agent_findings SET decision = 'dismissed' WHERE resolved = 1 AND decision = 'open'`);
   db.run(`CREATE TABLE IF NOT EXISTS brain_agent_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -694,6 +827,17 @@ export function consolidateExactDuplicateBrainSpacesFromDb(
         db.run('DELETE FROM brain_spaces WHERE id = ?', [duplicateId]);
         consolidated += 1;
       }
+      db.run(
+        `DELETE FROM brain_agent_findings
+         WHERE space_id = ?
+           AND id NOT IN (
+             SELECT MIN(id)
+             FROM brain_agent_findings
+             WHERE space_id = ?
+             GROUP BY agent_type, finding_type, title, COALESCE(url, ''), detail, severity, resolved
+           )`,
+        [group.canonicalId, group.canonicalId],
+      );
     }
     db.run('COMMIT');
     return consolidated;
@@ -874,8 +1018,13 @@ function scoreCandidate(space: BrainSpace, candidate: BookmarkSeedCandidate): nu
     ...candidate.categories,
     ...candidate.domains,
   ].join(' ').toLowerCase();
+  const authorIdentities = [candidate.authorHandle, candidate.authorName]
+    .map((value) => value.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, ''))
+    .filter(Boolean);
   for (const keyword of space.keywords) {
     if (keyword && haystack.includes(keyword.toLowerCase())) score += 2;
+    const identity = keyword.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, '');
+    if (identity && authorIdentities.includes(identity)) score += 4;
   }
   return score;
 }
@@ -894,8 +1043,10 @@ export async function seedBrainSpace(id: string): Promise<BrainSeedResult> {
       if (score <= 0) continue;
       matched++;
       db.run(
-        `INSERT OR IGNORE INTO brain_space_bookmarks (space_id, bookmark_id, source, score, added_at)
-         VALUES (?, ?, 'seed', ?, ?)`,
+        `INSERT INTO brain_space_bookmarks (space_id, bookmark_id, source, score, added_at)
+         VALUES (?, ?, 'seed', ?, ?)
+         ON CONFLICT(space_id, bookmark_id) DO UPDATE SET
+           score = MAX(brain_space_bookmarks.score, excluded.score)`,
         [space.id, candidate.id, score, now],
       );
       added += db.getRowsModified();
@@ -935,6 +1086,217 @@ export async function listBrainBookmarks(id: string): Promise<Array<Record<strin
       score: Number(r[8] ?? 0),
       addedAt: r[9],
     }));
+  } finally {
+    db.close();
+  }
+}
+
+export interface WorkingUnderstanding {
+  conclusion: string;
+  challenge: string;
+  nextStep: string;
+  successMeasure: string;
+  outcome: string;
+  evidenceIds: string[];
+  savedAt: string;
+}
+
+export function workingUnderstandingFromDb(db: Database, spaceId: string): WorkingUnderstanding[] {
+  initBrainSchema(db);
+  const rows = db.exec(`SELECT raw_json FROM brain_artifacts
+    WHERE space_id = ? AND source_type = 'note' AND source_label = 'Working understanding'
+    ORDER BY captured_at DESC, id DESC LIMIT 20`, [spaceId]);
+  return (rows[0]?.values || []).flatMap(([raw]) => {
+    try {
+      const value = JSON.parse(String(raw));
+      return value.kind === 'working_understanding' ? [value.record as WorkingUnderstanding] : [];
+    } catch { return []; }
+  });
+}
+
+export function saveWorkingUnderstandingFromDb(db: Database, spaceId: string, input: unknown): WorkingUnderstanding {
+  initBrainSchema(db);
+  const space = getSpaceFromDb(db, spaceId);
+  if (!space) throw new Error('Workspace not found');
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid understanding');
+  const payload = input as Record<string, unknown>;
+  const fields = ['conclusion', 'challenge', 'nextStep', 'successMeasure', 'outcome'] as const;
+  const record: WorkingUnderstanding = { conclusion: '', challenge: '', nextStep: '', successMeasure: '', outcome: '', evidenceIds: [], savedAt: nowIso() };
+  for (const field of fields) {
+    if (typeof payload[field] !== 'string' || payload[field].length > 6000) throw new Error(`Invalid ${field}`);
+    record[field] = payload[field].trim();
+  }
+  if (!record.conclusion && !record.nextStep) throw new Error('Add a conclusion or next step');
+  if (record.outcome && !record.nextStep) throw new Error('An outcome needs an experiment or next step');
+  if (!Array.isArray(payload.evidenceIds) || payload.evidenceIds.length > 30 || payload.evidenceIds.some(id => typeof id !== 'string')) throw new Error('Invalid evidence');
+  record.evidenceIds = [...new Set(payload.evidenceIds as string[])];
+  const evidence = record.evidenceIds.map(id => {
+    const row = db.exec(`SELECT b.author_handle, b.url, b.text FROM bookmarks b
+      JOIN brain_space_bookmarks s ON s.bookmark_id = b.id WHERE s.space_id = ? AND b.id = ?`, [spaceId, id])[0]?.values[0];
+    if (!row) throw new Error('Evidence must belong to this workspace');
+    return `@${row[0]}: ${row[2]}\n${row[1]}`;
+  });
+  const previous = workingUnderstandingFromDb(db, spaceId)[0];
+  if (previous && fields.every(field => previous[field] === record[field]) && JSON.stringify(previous.evidenceIds) === JSON.stringify(record.evidenceIds)) return previous;
+  if (previous) record.savedAt = new Date(Math.max(Date.now(), Date.parse(previous.savedAt) + 1)).toISOString();
+  const body = `Question: ${space.focusQuestion || space.name}\n\nMy current conclusion: ${record.conclusion}\n\nWhat could change my mind: ${record.challenge}\n\nNext experiment: ${record.nextStep}\n\nSuccess measure: ${record.successMeasure}\n\nObserved outcome: ${record.outcome}\n\nEvidence:\n${evidence.join('\n\n')}`;
+  upsertBrainArtifactFromDb(db, {
+    sourceType: 'note', sourceId: stableId('understanding', spaceId, record.savedAt, body), spaceId,
+    title: `${space.name}: working understanding`, body, author: 'You',
+    sourceLabel: 'Working understanding', capturedAt: record.savedAt,
+    rawJson: JSON.stringify({ kind: 'working_understanding', record }), confidence: 1,
+  });
+  db.run('UPDATE brain_spaces SET updated_at = ? WHERE id = ?', [record.savedAt, spaceId]);
+  return record;
+}
+
+export async function saveWorkingUnderstanding(spaceId: string, input: unknown): Promise<WorkingUnderstanding> {
+  const { db, dbPath } = await openBrainDb();
+  try {
+    const record = saveWorkingUnderstandingFromDb(db, spaceId, input);
+    saveDb(db, dbPath);
+    return record;
+  } finally { db.close(); }
+}
+
+export function brainWorkspaceBriefFromDb(db: Database, id: string): BrainWorkspaceBrief {
+  initBrainSchema(db);
+  const space = getSpaceFromDb(db, id);
+  if (!space) throw new Error(`Sub-Brain not found: ${id}`);
+
+  const enrichmentJoin = tableExists(db, 'bookmark_enrichment')
+    ? 'LEFT JOIN bookmark_enrichment e ON e.bookmark_id = b.id'
+    : '';
+  const keyClaim = tableExists(db, 'bookmark_enrichment')
+    ? "COALESCE(NULLIF(e.key_claim, ''), NULLIF(e.summary, ''), b.text)"
+    : 'b.text';
+  const whyItMatters = tableExists(db, 'bookmark_enrichment')
+    ? "COALESCE(NULLIF(e.why_it_matters, ''), '')"
+    : "''";
+  const keyRows = db.exec(`
+    SELECT b.id, ${keyClaim}, ${whyItMatters}, b.author_handle, b.author_name, b.url, b.text
+    FROM brain_space_bookmarks sb
+    JOIN bookmarks b ON b.id = sb.bookmark_id
+    ${enrichmentJoin}
+    WHERE sb.space_id = ?
+    ORDER BY
+      sb.score DESC,
+      CASE WHEN ${keyClaim} <> '' THEN 0 ELSE 1 END,
+      ${tableExists(db, 'bookmark_enrichment') ? 'COALESCE(e.enriched_at, b.posted_at, sb.added_at)' : 'COALESCE(b.posted_at, sb.added_at)'} DESC,
+      b.id
+    LIMIT 30
+  `, [space.id]);
+  const rankedIdeas = (keyRows[0]?.values ?? []).map((row) => {
+    const claim = String(row[1] ?? '').replace(/\s+/g, ' ').trim();
+    const sourceText = String(row[6] ?? '').replace(/\s+/g, ' ').trim();
+    return {
+      bookmarkId: String(row[0]),
+      title: firstSentence(claim || sourceText, 'Saved source'),
+      detail: sourceText || claim,
+      whyItMatters: /^This may be useful later,/i.test(String(row[2] ?? '')) ? '' : String(row[2] ?? ''),
+      author: String(row[3] || row[4] || ''),
+      url: (row[5] as string) ?? null,
+    };
+  });
+  const keyIdeas = diversifyBrainIdeas(rankedIdeas);
+  const practiceIdea = keyIdeas[0] ?? null;
+  const practice = practiceIdea ? (() => {
+    const ideaText = `${practiceIdea.title} ${practiceIdea.detail}`.toLowerCase();
+    const topic = space.keywords.find(
+      (keyword) => keyword.length >= 4 && ideaText.includes(keyword.toLowerCase()),
+    ) || space.name;
+    const author = practiceIdea.author.replace(/^@/, '');
+    const subject = displayBrainTerm(topic);
+    return {
+      bookmarkId: practiceIdea.bookmarkId,
+      cue: author
+        ? `What did @${author} claim about ${subject}, and what evidence or implication did the source include?`
+        : `What is the central idea about ${subject}, and what evidence or implication did the source include?`,
+      answer: practiceIdea.detail.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 900),
+      applicationPrompt: `How could this change your answer to: ${space.focusQuestion || `What should you do next with ${space.name}?`}`,
+      whyItMatters: practiceIdea.whyItMatters,
+      author: practiceIdea.author,
+      url: practiceIdea.url,
+    };
+  })() : null;
+
+  const storedActions: BrainWorkspaceBrief['nextActions'] = tableExists(db, 'bookmark_enrichment')
+    ? (db.exec(`
+        SELECT b.id, e.suggested_action, COALESCE(NULLIF(e.key_claim, ''), NULLIF(e.summary, ''), b.text), b.url
+        FROM brain_space_bookmarks sb
+        JOIN bookmarks b ON b.id = sb.bookmark_id
+        JOIN bookmark_enrichment e ON e.bookmark_id = b.id
+        WHERE sb.space_id = ?
+          AND TRIM(e.suggested_action) <> ''
+          AND e.suggested_action NOT LIKE 'Add a note explaining%'
+          AND e.suggested_action NOT LIKE 'Review this bookmark%'
+        GROUP BY e.suggested_action
+        ORDER BY sb.score DESC, e.enriched_at DESC
+        LIMIT 5
+      `, [space.id])[0]?.values ?? []).map((row) => ({
+        bookmarkId: String(row[0]),
+        action: String(row[1] ?? ''),
+        sourceTitle: firstSentence(String(row[2] ?? ''), 'Saved source'),
+        url: (row[3] as string) ?? null,
+      }))
+    : [];
+  const nextActions = storedActions.length > 0
+    ? storedActions
+    : keyIdeas.slice(0, 3).map((idea) => {
+        const source = idea.title.replace(/[.!?]+$/, '');
+        const content = `${idea.title} ${idea.detail}`.toLowerCase();
+        const action = /gbrain|second.brain|agent memory|knowledge graph|persistent memory/.test(content)
+          ? `Compare the system in “${source}” with Xtreme: capture one pattern to adopt, one boundary to preserve, and one result to measure.`
+          : /github|repo|tool|app|plugin|launch|open.source/.test(content)
+          ? `Evaluate “${source}” against this workspace: record the use case, proof it works, and a keep-or-drop decision.`
+          : /research|paper|study|benchmark|model|experiment/.test(content)
+            ? `Verify the main claim in “${source}”: capture one supporting fact, one assumption, and one small test.`
+            : `Connect “${source}” to the workspace focus: write one implication and the next decision it should change.`;
+        return {
+          bookmarkId: idea.bookmarkId,
+          action,
+          sourceTitle: idea.title,
+          url: idea.url,
+        };
+      });
+
+  const findingRows = db.exec(`
+    SELECT title, detail, severity, url
+    FROM brain_agent_findings
+    WHERE space_id = ? AND resolved = 0
+    ORDER BY CASE severity WHEN 'error' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END, created_at DESC
+    LIMIT 5
+  `, [space.id]);
+  const openQuestions: BrainWorkspaceBrief['openQuestions'] = (findingRows[0]?.values ?? []).map((row) => ({
+    title: String(row[0] ?? ''),
+    detail: String(row[1] ?? ''),
+    severity: (row[2] as BrainFinding['severity']) ?? 'info',
+    url: (row[3] as string) ?? null,
+  }));
+  if (space.kind === 'question' && space.focusQuestion) {
+    openQuestions.unshift({ title: space.focusQuestion, detail: 'The question this workspace is organized to answer.', severity: 'info', url: null });
+  }
+
+  const artifactRows = db.exec(`
+    SELECT a.id, a.source_type, a.source_id, a.space_id, s.name, a.title, a.url, a.body, a.author, a.source_label, a.captured_at, a.updated_at, a.confidence
+    FROM brain_artifacts a
+    LEFT JOIN brain_spaces s ON s.id = a.space_id
+    WHERE a.space_id = ?
+    ORDER BY a.updated_at DESC
+    LIMIT 6
+  `, [space.id]);
+  const recentEvidence = (artifactRows[0]?.values ?? []).map(rowToBrainArtifact);
+  const memoryCount = Number(db.exec(`SELECT COUNT(*) FROM brain_artifacts WHERE space_id = ?`, [space.id])[0]?.values?.[0]?.[0] ?? 0);
+  const focus = space.focusQuestion || space.description || `Build useful working knowledge about ${space.name}.`;
+  const overview = `${focus} This workspace currently connects ${space.bookmarkCount.toLocaleString()} saved sources, ${space.repoCount.toLocaleString()} watched projects, and ${memoryCount.toLocaleString()} memory cards.`;
+
+  return { overview, keyIdeas, nextActions, openQuestions, practice, recentEvidence, understanding: workingUnderstandingFromDb(db, id) };
+}
+
+export async function brainWorkspaceBrief(id: string): Promise<BrainWorkspaceBrief> {
+  const { db } = await openBrainDb();
+  try {
+    return brainWorkspaceBriefFromDb(db, id);
   } finally {
     db.close();
   }
@@ -981,8 +1343,28 @@ function rowToRepo(row: unknown[]): BrainRepo {
     lastCheckedAt: (row[6] as string) ?? null,
     lastReleaseId: (row[7] as string) ?? null,
     lastCommitSha: (row[8] as string) ?? null,
+    description: String(row[9] ?? ''),
+    htmlUrl: String(row[10] ?? ''),
+    homepage: String(row[11] ?? ''),
+    stars: Number(row[12] ?? 0),
+    openIssues: Number(row[13] ?? 0),
+    defaultBranch: String(row[14] ?? ''),
+    topics: parseJsonArray(row[15]),
+    readmeExcerpt: String(row[16] ?? ''),
+    latestReleaseName: String(row[17] ?? ''),
+    latestReleaseUrl: String(row[18] ?? ''),
+    latestCommitTitle: String(row[19] ?? ''),
+    latestCommitUrl: String(row[20] ?? ''),
+    latestCommitAuthor: String(row[21] ?? ''),
+    latestCommitAt: (row[22] as string) ?? null,
+    recommendedAction: String(row[23] ?? ''),
   };
 }
+
+const BRAIN_REPO_COLUMNS = `space_id, repo, owner, name, source, created_at, last_checked_at,
+  last_release_id, last_commit_sha, description, html_url, homepage, stars, open_issues,
+  default_branch, topics_json, readme_excerpt, latest_release_name, latest_release_url,
+  latest_commit_title, latest_commit_url, latest_commit_author, latest_commit_at, recommended_action`;
 
 export async function listBrainRepos(spaceId: string): Promise<BrainRepo[]> {
   const { db } = await openBrainDb();
@@ -990,8 +1372,7 @@ export async function listBrainRepos(spaceId: string): Promise<BrainRepo[]> {
     const space = getSpaceFromDb(db, spaceId);
     if (!space) throw new Error(`Sub-Brain not found: ${spaceId}`);
     const rows = db.exec(
-      `SELECT space_id, repo, owner, name, source, created_at, last_checked_at, last_release_id, last_commit_sha
-       FROM brain_space_repos WHERE space_id = ? ORDER BY repo`,
+      `SELECT ${BRAIN_REPO_COLUMNS} FROM brain_space_repos WHERE space_id = ? ORDER BY repo`,
       [space.id],
     );
     return (rows[0]?.values ?? []).map(rowToRepo);
@@ -1049,6 +1430,9 @@ function rowToFinding(row: unknown[]): BrainFinding {
     severity: (row[9] as BrainFinding['severity']) ?? 'info',
     createdAt: String(row[10] ?? ''),
     resolved: Number(row[11] ?? 0) === 1,
+    decision: (row[12] as BrainFinding['decision']) ?? (Number(row[11] ?? 0) === 1 ? 'dismissed' : 'open'),
+    decisionNote: String(row[13] ?? ''),
+    decidedAt: (row[14] as string) ?? null,
   };
 }
 
@@ -1351,88 +1735,204 @@ export async function createBrainNote(input: { title?: string; text: string; tag
   }
 }
 
+export function brainMemoryOverviewFromDb(db: Database, limit = 8): BrainMemoryOverview {
+  initBrainSchema(db);
+  const scalar = (sql: string): number => Number(db.exec(sql)[0]?.values?.[0]?.[0] ?? 0);
+  const artifactRows = db.exec(`
+    SELECT a.id, a.source_type, a.source_id, a.space_id, s.name, a.title, a.url, a.body, a.author, a.source_label, a.captured_at, a.updated_at, a.confidence
+    FROM brain_artifacts a
+    LEFT JOIN brain_spaces s ON s.id = a.space_id
+    ORDER BY a.updated_at DESC
+    LIMIT ?
+  `, [limit]);
+  const entityRows = db.exec(`
+    SELECT name, kind, mentions
+    FROM brain_entities
+    ORDER BY mentions DESC, updated_at DESC
+    LIMIT 10
+  `);
+  return {
+    artifactCount: scalar(`SELECT COUNT(*) FROM brain_artifacts`),
+    entityCount: scalar(`SELECT COUNT(*) FROM brain_entities`),
+    edgeCount: scalar(`SELECT COUNT(*) FROM brain_edges`),
+    claimCount: scalar(`SELECT COUNT(*) FROM brain_claims`),
+    timelineCount: scalar(`SELECT COUNT(*) FROM brain_timeline_events`),
+    recentArtifacts: (artifactRows[0]?.values ?? []).map(rowToBrainArtifact),
+    topEntities: (entityRows[0]?.values ?? []).map((row) => ({
+      name: String(row[0] ?? ''),
+      kind: String(row[1] ?? ''),
+      mentions: Number(row[2] ?? 0),
+    })),
+  };
+}
+
 export async function brainMemoryOverview(limit = 8): Promise<BrainMemoryOverview> {
-  const { db, dbPath } = await openBrainDb();
+  const { db } = await openBrainDb();
   try {
-    syncBrainMemoryFromDb(db);
-    saveDb(db, dbPath);
-    const scalar = (sql: string): number => Number(db.exec(sql)[0]?.values?.[0]?.[0] ?? 0);
-    const artifactRows = db.exec(`
-      SELECT a.id, a.source_type, a.source_id, a.space_id, s.name, a.title, a.url, a.body, a.author, a.source_label, a.captured_at, a.updated_at, a.confidence
-      FROM brain_artifacts a
-      LEFT JOIN brain_spaces s ON s.id = a.space_id
-      ORDER BY a.updated_at DESC
-      LIMIT ?
-    `, [limit]);
-    const entityRows = db.exec(`
-      SELECT name, kind, mentions
-      FROM brain_entities
-      ORDER BY mentions DESC, updated_at DESC
-      LIMIT 10
-    `);
-    return {
-      artifactCount: scalar(`SELECT COUNT(*) FROM brain_artifacts`),
-      entityCount: scalar(`SELECT COUNT(*) FROM brain_entities`),
-      edgeCount: scalar(`SELECT COUNT(*) FROM brain_edges`),
-      claimCount: scalar(`SELECT COUNT(*) FROM brain_claims`),
-      timelineCount: scalar(`SELECT COUNT(*) FROM brain_timeline_events`),
-      recentArtifacts: (artifactRows[0]?.values ?? []).map(rowToBrainArtifact),
-      topEntities: (entityRows[0]?.values ?? []).map((row) => ({
-        name: String(row[0] ?? ''),
-        kind: String(row[1] ?? ''),
-        mentions: Number(row[2] ?? 0),
-      })),
-    };
+    return brainMemoryOverviewFromDb(db, limit);
   } finally {
     db.close();
   }
+}
+
+export function listBrainWorkflowsFromDb(db: Database): BrainWorkflow[] {
+  initBrainSchema(db);
+  const rows = db.exec(`
+    SELECT id, name, description, button_label, icon, last_run_at
+    FROM brain_workflows
+    ORDER BY CASE id
+      WHEN 'capture' THEN 1 WHEN 'distill' THEN 2 WHEN 'connect' THEN 3
+      WHEN 'watch' THEN 4 WHEN 'review' THEN 5 WHEN 'repair' THEN 6
+      WHEN 'publish' THEN 7 ELSE 99 END
+  `);
+  return (rows[0]?.values ?? []).map(rowToWorkflow);
 }
 
 export async function listBrainWorkflows(): Promise<BrainWorkflow[]> {
   const { db } = await openBrainDb();
   try {
-    const rows = db.exec(`
-      SELECT id, name, description, button_label, icon, last_run_at
-      FROM brain_workflows
-      ORDER BY CASE id
-        WHEN 'capture' THEN 1 WHEN 'distill' THEN 2 WHEN 'connect' THEN 3
-        WHEN 'watch' THEN 4 WHEN 'review' THEN 5 WHEN 'repair' THEN 6
-        WHEN 'publish' THEN 7 ELSE 99 END
-    `);
-    return (rows[0]?.values ?? []).map(rowToWorkflow);
+    return listBrainWorkflowsFromDb(db);
   } finally {
     db.close();
   }
+}
+
+export function listBrainRunsFromDb(db: Database, limit = 20): BrainRun[] {
+  initBrainSchema(db);
+  const rows = db.exec(`
+    SELECT r.id, r.space_id, s.name, r.agent_type, r.status, r.started_at, r.finished_at, r.summary, r.error
+    FROM brain_agent_runs r
+    LEFT JOIN brain_spaces s ON s.id = r.space_id
+    ORDER BY r.started_at DESC
+    LIMIT ?
+  `, [limit]);
+  return (rows[0]?.values ?? []).map(rowToRun);
 }
 
 export async function listBrainRuns(limit = 20): Promise<BrainRun[]> {
   const { db } = await openBrainDb();
   try {
-    const rows = db.exec(`
-      SELECT r.id, r.space_id, s.name, r.agent_type, r.status, r.started_at, r.finished_at, r.summary, r.error
-      FROM brain_agent_runs r
-      LEFT JOIN brain_spaces s ON s.id = r.space_id
-      ORDER BY r.started_at DESC
-      LIMIT ?
-    `, [limit]);
-    return (rows[0]?.values ?? []).map(rowToRun);
+    return listBrainRunsFromDb(db, limit);
   } finally {
     db.close();
   }
 }
 
-export async function listBrainFindings(limit = 50, onlyOpen = false): Promise<BrainFinding[]> {
+export function listBrainFindingsFromDb(
+  db: Database,
+  limit = 50,
+  onlyOpen = false,
+  decision?: BrainFinding['decision'],
+): BrainFinding[] {
+  initBrainSchema(db);
+  const filters: string[] = [];
+  const params: Array<string | number> = [];
+  if (onlyOpen) filters.push('f.resolved = 0');
+  if (decision) {
+    filters.push('f.decision = ?');
+    params.push(decision);
+  }
+  params.push(limit);
+  const rows = db.exec(`
+    SELECT f.id, f.run_id, f.space_id, s.name, f.agent_type, f.finding_type, f.title, f.url, f.detail, f.severity, f.created_at, f.resolved,
+           f.decision, f.decision_note, f.decided_at
+    FROM brain_agent_findings f
+    LEFT JOIN brain_spaces s ON s.id = f.space_id
+    ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+    ORDER BY COALESCE(f.decided_at, f.created_at) DESC
+    LIMIT ?
+  `, params);
+  return (rows[0]?.values ?? []).map(rowToFinding);
+}
+
+export function decideBrainFindingFromDb(
+  db: Database,
+  id: number,
+  input: BrainFindingDecisionInput,
+): { finding: BrainFinding; artifactId: string | null; watchedRepo: string | null } {
+  initBrainSchema(db);
+  const finding = listBrainFindingsFromDb(db, 10_000, false).find((item) => item.id === id);
+  if (!finding) throw new Error(`Finding not found: ${id}`);
+  if (finding.resolved) {
+    if (finding.decision === input.decision) return { finding, artifactId: null, watchedRepo: null };
+    throw new Error('This update has already been reviewed.');
+  }
+
+  const title = String(input.title ?? finding.title).trim().slice(0, 220) || finding.title;
+  const detail = String(input.detail ?? finding.detail).trim() || finding.detail;
+  const note = String(input.note ?? '').trim().slice(0, 1000);
+  const decidedAt = nowIso();
+  let artifactId: string | null = null;
+  let watchedRepo: string | null = null;
+
+  if (input.decision === 'accepted') {
+    const artifact = upsertBrainArtifactFromDb(db, {
+      sourceType: 'accepted_finding',
+      sourceId: String(id),
+      spaceId: finding.spaceId,
+      title,
+      url: finding.url,
+      body: note ? `${detail}\n\nReview note: ${note}` : detail,
+      sourceLabel: 'Accepted workspace update',
+      capturedAt: finding.createdAt,
+      rawJson: JSON.stringify({ findingType: finding.findingType, agentType: finding.agentType, decisionNote: note }),
+      confidence: 0.95,
+      githubUrls: finding.url?.includes('github.com/') ? [finding.url] : [],
+    });
+    artifactId = artifact.id;
+
+    const parsedRepo = finding.findingType === 'github_discovery' && finding.url
+      ? parseGitHubRepo(finding.url)
+      : null;
+    if (parsedRepo) {
+      db.run(
+        `INSERT OR IGNORE INTO brain_space_repos (space_id, repo, owner, name, source, created_at)
+         VALUES (?, ?, ?, ?, 'accepted_finding', ?)`,
+        [finding.spaceId, parsedRepo.repo, parsedRepo.owner, parsedRepo.name, decidedAt],
+      );
+      watchedRepo = parsedRepo.repo;
+    }
+  }
+
+  db.run(
+    `UPDATE brain_agent_findings
+     SET title = ?, detail = ?, resolved = 1, decision = ?, decision_note = ?, decided_at = ?
+     WHERE id = ?`,
+    [title, detail, input.decision, note, decidedAt, id],
+  );
+  db.run(
+    `INSERT INTO brain_timeline_events (artifact_id, event_type, title, detail, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [artifactId ?? `finding:${id}`, `finding_${input.decision}`, title, note || detail.slice(0, 300), decidedAt],
+  );
+
+  const updated = listBrainFindingsFromDb(db, 10_000, false).find((item) => item.id === id)!;
+  return { finding: updated, artifactId, watchedRepo };
+}
+
+export async function decideBrainFinding(
+  id: number,
+  input: BrainFindingDecisionInput,
+): Promise<{ finding: BrainFinding; artifactId: string | null; watchedRepo: string | null }> {
+  const { db, dbPath } = await openBrainDb();
+  try {
+    const result = decideBrainFindingFromDb(db, id, input);
+    saveDb(db, dbPath);
+    await updateBrainPages(db);
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
+export async function listBrainFindings(
+  limit = 50,
+  onlyOpen = false,
+  decision?: BrainFinding['decision'],
+): Promise<BrainFinding[]> {
   const { db } = await openBrainDb();
   try {
-    const rows = db.exec(`
-      SELECT f.id, f.run_id, f.space_id, s.name, f.agent_type, f.finding_type, f.title, f.url, f.detail, f.severity, f.created_at, f.resolved
-      FROM brain_agent_findings f
-      LEFT JOIN brain_spaces s ON s.id = f.space_id
-      ${onlyOpen ? 'WHERE f.resolved = 0' : ''}
-      ORDER BY f.created_at DESC
-      LIMIT ?
-    `, [limit]);
-    return (rows[0]?.values ?? []).map(rowToFinding);
+    return listBrainFindingsFromDb(db, limit, onlyOpen, decision);
   } finally {
     db.close();
   }
@@ -1453,6 +1953,30 @@ function finishRun(db: Database, runId: number, status: 'success' | 'error', sum
   );
 }
 
+export function recoverStaleBrainAgentRuns(db: Database, staleAfterMs = 30 * 60 * 1000): number {
+  const cutoff = new Date(Date.now() - staleAfterMs).toISOString();
+  const rows = db.exec(
+    `SELECT id FROM brain_agent_runs WHERE status = 'running' AND started_at < ?`,
+    [cutoff],
+  );
+  const ids = (rows[0]?.values ?? []).map((row) => Number(row[0]));
+  for (const id of ids) {
+    db.run(
+      `UPDATE brain_agent_runs
+       SET status = 'error', finished_at = ?, summary = ?, error = ?
+       WHERE id = ? AND status = 'running'`,
+      [nowIso(), 'Recovered an interrupted agent run.', 'The previous process ended before this run could finish.', id],
+    );
+  }
+  return ids.length;
+}
+
+function assertNoRunningBrainAgents(db: Database): void {
+  recoverStaleBrainAgentRuns(db);
+  const running = db.exec(`SELECT COUNT(*) FROM brain_agent_runs WHERE status = 'running'`)[0]?.values?.[0]?.[0];
+  if (Number(running ?? 0) > 0) throw new Error('Brain agents are already running.');
+}
+
 function addFinding(
   db: Database,
   runId: number,
@@ -1463,17 +1987,18 @@ function addFinding(
   detail: string,
   url?: string | null,
   severity: BrainFinding['severity'] = 'info',
-): void {
+): boolean {
   const existing = db.exec(
     `SELECT id FROM brain_agent_findings WHERE space_id = ? AND agent_type = ? AND finding_type = ? AND title = ? AND COALESCE(url, '') = COALESCE(?, '') LIMIT 1`,
     [spaceId, agentType, findingType, title, url ?? null],
   );
-  if (existing[0]?.values?.length) return;
+  if (existing[0]?.values?.length) return false;
   db.run(
     `INSERT INTO brain_agent_findings (run_id, space_id, agent_type, finding_type, title, url, detail, severity, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [runId, spaceId, agentType, findingType, title, url ?? null, detail, severity, nowIso()],
   );
+  return true;
 }
 
 function createWorkflowRun(db: Database, workflowId: BrainWorkflowId, spaceId: string | null): number {
@@ -1566,6 +2091,7 @@ export async function runBrainWorkflow(
       const totalEdges = Number(db.exec(`SELECT COUNT(*) FROM brain_edges`)[0]?.values?.[0]?.[0] ?? 0);
       summary = `Mapped ${totalEdges} typed connection(s) across people, repos, domains, and topics.`;
     } else if (workflowId === 'watch') {
+      assertNoRunningBrainAgents(db);
       let findings = 0;
       for (const space of spaces) {
         findings += await runRepoWatcherForSpace(db, space);
@@ -1651,13 +2177,72 @@ async function githubJson(pathname: string): Promise<any> {
   return res.json();
 }
 
+function cleanReadmeExcerpt(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[|*_`>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 520);
+}
+
+function decodeGithubReadme(readme: any): string {
+  if (!readme?.content || readme.encoding !== 'base64') return '';
+  try {
+    return cleanReadmeExcerpt(Buffer.from(String(readme.content).replace(/\s/g, ''), 'base64').toString('utf8'));
+  } catch {
+    return '';
+  }
+}
+
+export function buildBrainRepoIntelligence(
+  space: Pick<BrainSpace, 'name' | 'focusQuestion'>,
+  repo: Pick<BrainRepo, 'repo'>,
+  meta: any,
+  release: any,
+  commit: any,
+  readme: any,
+  change: 'baseline' | 'release' | 'commit',
+): BrainRepoIntelligence {
+  const description = String(meta?.description || '').trim();
+  const readmeExcerpt = decodeGithubReadme(readme);
+  const latestReleaseName = String(release?.name || release?.tag_name || '').trim();
+  const latestCommitTitle = String(commit?.commit?.message || '').split('\n')[0].trim();
+  const focus = space.focusQuestion ? ` the question "${space.focusQuestion}"` : ` ${space.name}`;
+  const recommendedAction = change === 'release'
+    ? `Review ${latestReleaseName || 'the new release'}, identify what changed, and record one implication for${focus}.`
+    : change === 'commit'
+      ? `Inspect "${latestCommitTitle || 'the latest commit'}" and decide whether it changes what this workspace should remember or try.`
+      : `Start with the README, capture one durable principle, and compare the project's approach with${focus}.`;
+  return {
+    description: description || readmeExcerpt.slice(0, 220) || `${repo.repo} is a watched GitHub project.`,
+    htmlUrl: String(meta?.html_url || `https://github.com/${repo.repo}`),
+    homepage: String(meta?.homepage || ''),
+    stars: Number(meta?.stargazers_count || 0),
+    openIssues: Number(meta?.open_issues_count || 0),
+    defaultBranch: String(meta?.default_branch || ''),
+    topics: Array.isArray(meta?.topics) ? meta.topics.map(String).slice(0, 8) : [],
+    readmeExcerpt,
+    latestReleaseName,
+    latestReleaseUrl: String(release?.html_url || ''),
+    latestCommitTitle,
+    latestCommitUrl: String(commit?.html_url || ''),
+    latestCommitAuthor: String(commit?.commit?.author?.name || commit?.author?.login || ''),
+    latestCommitAt: commit?.commit?.author?.date ? String(commit.commit.author.date) : null,
+    recommendedAction,
+  };
+}
+
 async function runRepoWatcherForSpace(db: Database, space: BrainSpace): Promise<number> {
   const runId = createRun(db, space.id, 'repo_watcher');
   let findings = 0;
   try {
     const repoRows = db.exec(
-      `SELECT space_id, repo, owner, name, source, created_at, last_checked_at, last_release_id, last_commit_sha
-       FROM brain_space_repos WHERE space_id = ? ORDER BY repo`,
+      `SELECT ${BRAIN_REPO_COLUMNS} FROM brain_space_repos WHERE space_id = ? ORDER BY repo`,
       [space.id],
     );
     const repos = (repoRows[0]?.values ?? []).map(rowToRepo);
@@ -1667,62 +2252,72 @@ async function runRepoWatcherForSpace(db: Database, space: BrainSpace): Promise<
     }
     for (const repo of repos) {
       try {
-        const [meta, releases, commits, issues] = await Promise.all([
+        const [meta, releases, commits, readme] = await Promise.all([
           githubJson(`/repos/${repo.owner}/${repo.name}`),
           githubJson(`/repos/${repo.owner}/${repo.name}/releases?per_page=1`).catch(() => []),
           githubJson(`/repos/${repo.owner}/${repo.name}/commits?per_page=1`).catch(() => []),
-          githubJson(`/repos/${repo.owner}/${repo.name}/issues?state=open&per_page=3`).catch(() => []),
+          githubJson(`/repos/${repo.owner}/${repo.name}/readme`).catch(() => null),
         ]);
 
         const release = Array.isArray(releases) ? releases[0] : null;
-        if (release?.id && String(release.id) !== repo.lastReleaseId) {
-          addFinding(
+        const commit = Array.isArray(commits) ? commits[0] : null;
+        const firstCheck = !repo.lastCheckedAt;
+        const releaseChanged = !firstCheck && release?.id && String(release.id) !== repo.lastReleaseId;
+        const commitChanged = !firstCheck && commit?.sha && commit.sha !== repo.lastCommitSha;
+        const intelligence = buildBrainRepoIntelligence(
+          space,
+          repo,
+          meta,
+          release,
+          commit,
+          readme,
+          releaseChanged ? 'release' : commitChanged ? 'commit' : 'baseline',
+        );
+
+        if (releaseChanged) {
+          if (addFinding(
             db,
             runId,
             space.id,
             'repo_watcher',
             'release',
             `${repo.repo}: ${release.name || release.tag_name}`,
-            (release.body || 'New release detected.').slice(0, 2000),
+            `${String(release.body || intelligence.description).slice(0, 1500)}\n\nWhy it matters: this project is watched in ${space.name}${space.focusQuestion ? ` to help answer "${space.focusQuestion}"` : ''}.\n\nNext step: ${intelligence.recommendedAction}`,
             release.html_url,
-          );
-          findings++;
+          )) findings++;
         }
 
-        const commit = Array.isArray(commits) ? commits[0] : null;
-        if (commit?.sha && commit.sha !== repo.lastCommitSha) {
-          addFinding(
+        if (commitChanged) {
+          if (addFinding(
             db,
             runId,
             space.id,
             'repo_watcher',
             'commit',
             `${repo.repo}: ${commit.commit?.message?.split('\n')[0] || 'new commit'}`,
-            `Latest commit by ${commit.commit?.author?.name || 'unknown'} on ${commit.commit?.author?.date || 'unknown date'}.`,
+            `Changed by ${intelligence.latestCommitAuthor || 'an unknown contributor'} on ${intelligence.latestCommitAt || 'an unknown date'}.\n\nWhy it matters: this is the newest code-level change in a project watched by ${space.name}.\n\nNext step: ${intelligence.recommendedAction}`,
             commit.html_url,
-          );
-          findings++;
+          )) findings++;
         }
 
-        addFinding(
-          db,
-          runId,
-          space.id,
-          'repo_watcher',
-          'repo_status',
-          `${repo.repo}: ${meta.stargazers_count ?? 0} stars, ${meta.open_issues_count ?? 0} open issues`,
-          `Recent open issues: ${(Array.isArray(issues) ? issues : []).map((i: any) => `#${i.number} ${i.title}`).join('; ') || 'none returned'}.`,
-          meta.html_url,
-        );
-        findings++;
-
         db.run(
-          `UPDATE brain_space_repos SET last_checked_at = ?, last_release_id = ?, last_commit_sha = ? WHERE space_id = ? AND repo = ?`,
-          [nowIso(), release?.id ? String(release.id) : repo.lastReleaseId, commit?.sha ?? repo.lastCommitSha, space.id, repo.repo],
+          `UPDATE brain_space_repos SET
+             last_checked_at = ?, last_release_id = ?, last_commit_sha = ?, description = ?, html_url = ?,
+             homepage = ?, stars = ?, open_issues = ?, default_branch = ?, topics_json = ?, readme_excerpt = ?,
+             latest_release_name = ?, latest_release_url = ?, latest_commit_title = ?, latest_commit_url = ?,
+             latest_commit_author = ?, latest_commit_at = ?, recommended_action = ?
+           WHERE space_id = ? AND repo = ?`,
+          [
+            nowIso(), release?.id ? String(release.id) : repo.lastReleaseId, commit?.sha ?? repo.lastCommitSha,
+            intelligence.description, intelligence.htmlUrl, intelligence.homepage, intelligence.stars,
+            intelligence.openIssues, intelligence.defaultBranch, JSON.stringify(intelligence.topics), intelligence.readmeExcerpt,
+            intelligence.latestReleaseName, intelligence.latestReleaseUrl, intelligence.latestCommitTitle,
+            intelligence.latestCommitUrl, intelligence.latestCommitAuthor, intelligence.latestCommitAt,
+            intelligence.recommendedAction, space.id, repo.repo,
+          ],
         );
       } catch (err) {
-        addFinding(db, runId, space.id, 'repo_watcher', 'repo_error', `${repo.repo}: watcher failed`, (err as Error).message, null, 'warning');
-        findings++;
+        if (addFinding(db, runId, space.id, 'repo_watcher', 'repo_error', `${repo.repo}: watcher failed`, (err as Error).message, null, 'warning')) findings++;
       }
     }
     db.run(`UPDATE brain_spaces SET last_agent_run_at = ?, updated_at = ? WHERE id = ?`, [nowIso(), nowIso(), space.id]);
@@ -1732,6 +2327,24 @@ async function runRepoWatcherForSpace(db: Database, space: BrainSpace): Promise<
     finishRun(db, runId, 'error', 'Repo watcher failed.', (err as Error).message);
     throw err;
   }
+}
+
+const GENERIC_DISCOVERY_TERMS = new Set([
+  'agent', 'agents', 'app', 'apps', 'github', 'open source', 'project', 'projects', 'research', 'tool', 'tools',
+]);
+
+export function scoreGithubDiscovery(item: any, terms: string[]): number {
+  const fullName = String(item?.full_name || '').toLowerCase();
+  const description = String(item?.description || '').toLowerCase();
+  const topics = (Array.isArray(item?.topics) ? item.topics : []).join(' ').toLowerCase();
+  return terms.reduce((score, rawTerm) => {
+    const term = rawTerm.toLowerCase().trim();
+    if (!term || GENERIC_DISCOVERY_TERMS.has(term)) return score;
+    if (fullName.includes(term)) return score + 4;
+    if (description.includes(term)) return score + 2;
+    if (topics.includes(term)) return score + 1;
+    return score;
+  }, 0);
 }
 
 async function runResearchScoutForSpace(db: Database, space: BrainSpace): Promise<number> {
@@ -1744,11 +2357,20 @@ async function runResearchScoutForSpace(db: Database, space: BrainSpace): Promis
       return findings;
     }
 
-    const query = encodeURIComponent(`${terms.join(' ')} in:name,description,readme`);
+    const specificTerms = terms
+      .map((term) => term.toLowerCase().trim())
+      .filter((term) => term.length >= 4 && !GENERIC_DISCOVERY_TERMS.has(term));
+    const queryTerms = specificTerms.length ? specificTerms : terms;
+    const query = encodeURIComponent(`${queryTerms.join(' ')} in:name,description,readme`);
     try {
       const data = await githubJson(`/search/repositories?q=${query}&sort=updated&order=desc&per_page=5`);
-      for (const item of data.items ?? []) {
-        addFinding(
+      const candidates = (data.items ?? [])
+        .map((item: any) => ({ item, score: scoreGithubDiscovery(item, queryTerms) }))
+        .filter((candidate: { score: number }) => candidate.score >= 2)
+        .sort((a: { score: number }, b: { score: number }) => b.score - a.score)
+        .slice(0, 5);
+      for (const { item } of candidates) {
+        if (addFinding(
           db,
           runId,
           space.id,
@@ -1757,12 +2379,10 @@ async function runResearchScoutForSpace(db: Database, space: BrainSpace): Promis
           `${item.full_name}: ${item.stargazers_count ?? 0} stars`,
           item.description || 'GitHub repository matched this Sub-Brain topic.',
           item.html_url,
-        );
-        findings++;
+        )) findings++;
       }
     } catch (err) {
-      addFinding(db, runId, space.id, 'research_scout', 'github_search_error', 'GitHub discovery failed', (err as Error).message, null, 'warning');
-      findings++;
+      if (addFinding(db, runId, space.id, 'research_scout', 'github_search_error', 'GitHub discovery failed', (err as Error).message, null, 'warning')) findings++;
     }
 
     if (process.env.BRAVE_SEARCH_API_KEY) {
@@ -1776,16 +2396,13 @@ async function runResearchScoutForSpace(db: Database, space: BrainSpace): Promis
         if (!res.ok) throw new Error(`Brave ${res.status}: ${await res.text()}`);
         const data = await res.json() as any;
         for (const item of data.web?.results ?? []) {
-          addFinding(db, runId, space.id, 'research_scout', 'web_discovery', item.title, item.description || 'Web result matched this Sub-Brain topic.', item.url);
-          findings++;
+          if (addFinding(db, runId, space.id, 'research_scout', 'web_discovery', item.title, item.description || 'Web result matched this Sub-Brain topic.', item.url)) findings++;
         }
       } catch (err) {
-        addFinding(db, runId, space.id, 'research_scout', 'web_search_error', 'Web discovery failed', (err as Error).message, null, 'warning');
-        findings++;
+        if (addFinding(db, runId, space.id, 'research_scout', 'web_search_error', 'Web discovery failed', (err as Error).message, null, 'warning')) findings++;
       }
     } else {
       addFinding(db, runId, space.id, 'research_scout', 'web_search_disabled', 'Web discovery disabled', 'Set BRAVE_SEARCH_API_KEY to enable web search. GitHub discovery still ran.', null, 'info');
-      findings++;
     }
 
     db.run(`UPDATE brain_spaces SET last_agent_run_at = ?, updated_at = ? WHERE id = ?`, [nowIso(), nowIso(), space.id]);
@@ -1800,8 +2417,7 @@ async function runResearchScoutForSpace(db: Database, space: BrainSpace): Promis
 export async function runBrainAgents(target: string = 'all'): Promise<{ spaces: number; findings: number; runs: BrainRun[] }> {
   const { db, dbPath } = await openBrainDb();
   try {
-    const running = db.exec(`SELECT COUNT(*) FROM brain_agent_runs WHERE status = 'running'`)[0]?.values?.[0]?.[0];
-    if (Number(running ?? 0) > 0) throw new Error('Brain agents are already running.');
+    assertNoRunningBrainAgents(db);
     const spaces = target === 'all'
       ? listBrainSpacesFromDb(db)
       : [getSpaceFromDb(db, target)].filter((s): s is BrainSpace => Boolean(s));
@@ -1923,12 +2539,12 @@ export async function updateBrainPages(db?: Database): Promise<void> {
   }
 }
 
-export async function brainDashboard(): Promise<BrainDashboard> {
-  const spaces = await listBrainSpaces();
-  const recentRuns = await listBrainRuns(8);
-  const findings = await listBrainFindings(12, true);
-  const memory = await brainMemoryOverview(8);
-  const workflows = await listBrainWorkflows();
+export function brainDashboardFromDb(db: Database): BrainDashboard {
+  const spaces = listBrainSpacesFromDb(db);
+  const recentRuns = listBrainRunsFromDb(db, 8);
+  const findings = listBrainFindingsFromDb(db, 12, true);
+  const memory = brainMemoryOverviewFromDb(db, 8);
+  const workflows = listBrainWorkflowsFromDb(db);
   const staleThreshold = Date.now() - 24 * 60 * 60 * 1000;
   return {
     spaces,
@@ -1939,4 +2555,13 @@ export async function brainDashboard(): Promise<BrainDashboard> {
     memory,
     workflows,
   };
+}
+
+export async function brainDashboard(): Promise<BrainDashboard> {
+  const { db } = await openBrainDb();
+  try {
+    return brainDashboardFromDb(db);
+  } finally {
+    db.close();
+  }
 }

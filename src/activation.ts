@@ -799,6 +799,40 @@ export function generateTodayQueueFromDb(
   return existing.slice(0, limit);
 }
 
+export function queueBookmarkForRecallFromDb(
+  db: Database,
+  bookmarkId: string,
+  date = todayKey(),
+): TodayQueueItem {
+  ensureActivationSchema(db);
+  const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [bookmarkId])[0]?.values.length;
+  if (!exists) throw new Error(`Bookmark not found: ${bookmarkId}`);
+  const createdAt = nowIso();
+  const breakdown: ScoreComponent[] = [{
+    key: 'deliberate_practice',
+    label: 'You chose this idea for practice',
+    points: 200,
+  }];
+  db.run(
+    `INSERT INTO today_queue (
+       queue_date, bookmark_id, reason, score, score_json, status, snoozed_until, created_at, acted_at
+     ) VALUES (?, ?, 'deliberate_practice', 200, ?, 'pending', NULL, ?, NULL)
+     ON CONFLICT(queue_date, bookmark_id) DO UPDATE SET
+       reason = excluded.reason,
+       score = excluded.score,
+       score_json = excluded.score_json,
+       status = 'pending',
+       snoozed_until = NULL,
+       acted_at = NULL`,
+    [date, bookmarkId, JSON.stringify(breakdown), createdAt],
+  );
+  upsertActivationProfileFromDb(db, bookmarkId, { nextReviewAt: createdAt });
+  recordActivationEventFromDb(db, bookmarkId, 'practice_queued', { date });
+  const item = listTodayQueueFromDb(db, date).find((entry) => entry.bookmarkId === bookmarkId);
+  if (!item) throw new Error('Could not schedule recall practice.');
+  return item;
+}
+
 export function updateTodayQueueItemFromDb(
   db: Database,
   id: number,
@@ -837,6 +871,53 @@ export function updateTodayQueueItemFromDb(
   );
   const updated = updatedRows[0]?.values[0];
   return updated ? rowToTodayItem(updated) : null;
+}
+
+export function reviewRecallQueueItemFromDb(
+  db: Database,
+  id: number,
+  rating: 'again' | 'hard' | 'remembered',
+  now = Date.now(),
+  response = '',
+): { item: TodayQueueItem; nextReviewAt: string } | null {
+  ensureActivationSchema(db);
+  const currentRows = db.exec(
+    `SELECT bookmark_id, status FROM today_queue WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  if (!currentRows[0]?.values[0] || currentRows[0].values[0][1] !== 'pending') return null;
+  const bookmarkId = String(currentRows[0]?.values?.[0]?.[0] ?? '');
+  const successfulReviews = bookmarkId
+    ? Number(db.exec(
+      `SELECT COUNT(*) FROM activation_events WHERE bookmark_id = ? AND event_type = 'reviewed'`,
+      [bookmarkId],
+    )[0]?.values?.[0]?.[0] ?? 0)
+    : 0;
+  const rememberedIntervals = [14, 30, 60, 120, 180];
+  const delayDays = rating === 'again'
+    ? 1
+    : rating === 'hard'
+      ? 4
+      : rememberedIntervals[Math.min(successfulReviews, rememberedIntervals.length - 1)];
+  const nextReviewAt = new Date(now + delayDays * DAY_MS).toISOString();
+  const item = updateTodayQueueItemFromDb(
+    db,
+    id,
+    rating === 'remembered' ? 'done' : 'snooze',
+    nextReviewAt,
+  );
+  if (!item) return null;
+  upsertActivationProfileFromDb(db, item.bookmarkId, {
+    nextReviewAt,
+    ...(rating === 'remembered' ? { lastUsedAt: new Date(now).toISOString() } : {}),
+  });
+  recordActivationEventFromDb(
+    db,
+    item.bookmarkId,
+    rating === 'remembered' ? 'reviewed' : rating === 'hard' ? 'recall_hard' : 'recall_again',
+    { queueId: id, rating, nextReviewAt, response: cleanText(response).slice(0, 1200) },
+  );
+  return { item, nextReviewAt };
 }
 
 function cleanText(value: unknown): string {

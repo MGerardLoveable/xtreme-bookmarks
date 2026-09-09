@@ -172,6 +172,11 @@ export function LibraryView(root) {
           <button class="btn btn-ghost btn-sm" id="lib-sort" title="Show bookmarks in the same saved order as X">
             <span data-icon="bookmark"></span><span id="lib-sort-label">X order</span>
           </button>
+          <select class="search-sort-select" id="lib-search-sort" aria-label="Order search results" hidden>
+            <option value="relevance">Best match</option>
+            <option value="desc">Newest saved</option>
+            <option value="asc">Oldest saved</option>
+          </select>
           <button class="btn btn-ghost btn-sm" id="lib-clear" title="Clear all filters">
             <span data-icon="x"></span>Clear
           </button>
@@ -242,6 +247,7 @@ export function LibraryView(root) {
     search: $('#lib-search', root),
     sort: $('#lib-sort', root),
     sortLabel: $('#lib-sort-label', root),
+    searchSort: $('#lib-search-sort', root),
     clear: $('#lib-clear', root),
     presentation: $('#lib-presentation', root),
     presentationLabel: $('#lib-presentation-label', root),
@@ -417,11 +423,15 @@ export function LibraryView(root) {
   function setFilter(patch) {
     const next = { ...patch };
     const hasQuery = Object.prototype.hasOwnProperty.call(next, 'q');
+    const hadQuery = Boolean(state.filters.q);
     // Toggle behavior: clicking the same rail item clears it.
     Object.keys(next).forEach((k) => {
       if (k !== 'q' && state.filters[k] === next[k] && next[k] !== null) next[k] = null;
     });
     Object.assign(state.filters, next);
+    const hasQueryNow = Boolean(state.filters.q);
+    if (hasQuery && hasQueryNow && !hadQuery) state.sort = 'relevance';
+    if (hasQuery && !hasQueryNow && state.sort === 'relevance') state.sort = 'desc';
     if (hasQuery) els.search.value = state.filters.q || '';
     state.offset = 0;
     renderActive();
@@ -482,11 +492,15 @@ export function LibraryView(root) {
     const total = state.total;
     const shown = state.bookmarks.length;
     const activeFilter = state.filters.collection || state.filters.category || state.filters.domain || state.filters.author || state.filters.readStatus || '';
+    const isSearching = Boolean(state.filters.q);
     const usesXOrder = state.order?.mode === 'x';
     const unknownOrder = Number(state.order?.unpositioned || 0);
+    els.sort.hidden = isSearching;
+    els.searchSort.hidden = !isSearching;
+    els.searchSort.value = isSearching ? state.sort : 'relevance';
     els.sort.disabled = !usesXOrder;
-    els.sortLabel.textContent = usesXOrder ? (state.sort === 'desc' ? 'X order' : 'Oldest saved') : 'Best match';
-    els.sort.title = usesXOrder ? 'Show bookmarks in the same saved order as X' : 'Search results are ordered by relevance';
+    els.sortLabel.textContent = state.sort === 'desc' ? 'X order' : 'Oldest saved';
+    els.sort.title = 'Show bookmarks in the same saved order as X';
     els.summary.innerHTML = `
       <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> of ${fmtNumber(total)} results</span>
       <span class="summary-context" title="${usesXOrder ? 'Matches the saved bookmark order shown by X' : 'Search results are ordered by relevance'}"><span data-icon="${usesXOrder ? 'bookmark' : 'sparkles'}"></span>${usesXOrder ? (state.sort === 'desc' ? 'X order' : 'Oldest saved') : 'Best match'}</span>
@@ -1310,6 +1324,11 @@ export function LibraryView(root) {
     state.offset = 0;
     load();
   });
+  els.searchSort.addEventListener('change', () => {
+    state.sort = els.searchSort.value;
+    state.offset = 0;
+    load();
+  });
   els.presentation.addEventListener('click', () => {
     setPresentation(state.presentation === 'classic' ? 'refined' : 'classic');
   });
@@ -1380,9 +1399,18 @@ export function LibraryView(root) {
       }
     },
     focusSearch() { els.search.focus(); els.search.select(); },
+    showLatest() {
+      state.sort = 'desc';
+      clearAll();
+      clearDetail();
+      loadFacets();
+    },
     applyFilter(patch) {
       setFilter(patch);
       if (patch.q !== undefined) els.search.value = patch.q || '';
+    },
+    openBookmark(id) {
+      if (id) void select(String(id));
     },
     refresh() { load(); loadFacets(); },
   };

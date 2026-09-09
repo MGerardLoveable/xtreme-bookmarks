@@ -49,9 +49,13 @@ import {
   getAuthorDossierFromDb,
   getBookmarkActivationDetailsFromDb,
   getBrainCycleStatusFromDb,
+  generateTodayQueueFromDb,
+  queueBookmarkForRecallFromDb,
   recordActivationEventFromDb,
+  reviewRecallQueueItemFromDb,
   removeBookmarkFromProjectFromDb,
   runBrainCycleFromDb,
+  updateTodayQueueItemFromDb,
   upsertActivationProfileFromDb,
   type ActivationProfileInput,
   type ProjectItemRole,
@@ -93,16 +97,25 @@ import {
 import {
   addBrainBookmark,
   addBrainRepo,
+  brainSlug,
   brainMemoryOverview,
   brainDashboard,
+  brainDashboardFromDb,
+  brainWorkspaceBriefFromDb,
   createBrainNote,
+  saveWorkingUnderstanding,
+  workingUnderstandingFromDb,
   createBrainSpace,
+  decideBrainFinding,
   deleteBrainSpace,
+  consolidateExactDuplicateBrainSpacesFromDb,
+  findExactDuplicateBrainSpaceGroupsFromDb,
   initBrainSchema,
   listBrainBookmarks,
   listBrainFindings,
   listBrainRepos,
   listBrainRuns,
+  listBrainSpacesFromDb,
   listBrainSpaces,
   listBrainWorkflowRuns,
   listBrainWorkflows,
@@ -113,6 +126,7 @@ import {
   seedBrainSpace,
   syncBrainMemory,
   updateBrainSpace,
+  type BrainSpace,
   type BrainSpaceKind,
   type BrainSpaceStatus,
   type BrainWorkflowId,
@@ -153,6 +167,7 @@ type WebRuntimeState = {
   lastGrabSucceededAt?: string;
   lastGrabError?: string;
   lastGrabProgress?: SyncProgress;
+  preferredBrowserId?: string;
 };
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
@@ -520,7 +535,7 @@ function isCookieReadFailure(err: unknown): boolean {
 
 function isBrowserSessionFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return isCookieReadFailure(err) || /GraphQL Bookmarks API returned (401|403)|X session may have expired/i.test(message);
+  return isCookieReadFailure(err) || /GraphQL Bookmarks API returned (401|403)|X session may have expired|could not authenticate the browser session/i.test(message);
 }
 
 function installedBrowserIds(): string[] {
@@ -534,6 +549,15 @@ function installedBrowserIds(): string[] {
       return false;
     }
   });
+}
+
+export function resolveBrowserAttemptOrder(
+  installed: string[],
+  preferredBrowserId?: string,
+): string[] {
+  const unique = [...new Set(installed)];
+  if (!preferredBrowserId || !unique.includes(preferredBrowserId)) return unique;
+  return [preferredBrowserId, ...unique.filter(id => id !== preferredBrowserId)];
 }
 
 function startAuthFlow(): string {
@@ -642,6 +666,14 @@ interface Filters {
   limit?: number;
   offset?: number;
   readStatus?: string;
+}
+
+export type BookmarkListSort = 'asc' | 'desc' | 'relevance';
+
+export function resolveBookmarkListSort(value?: string | null): BookmarkListSort {
+  if (value === 'relevance') return 'relevance';
+  if (value === 'asc' || value === 'oldest') return 'asc';
+  return 'desc';
 }
 
 interface WebAuthConfig {
@@ -765,7 +797,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     after: params.get('after') || undefined,
     capturedAfter: params.get('capturedAfter') || undefined,
     before: params.get('before') || undefined,
-    sort: params.get('sort') || 'desc',
+    sort: resolveBookmarkListSort(params.get('sort')),
     limit: Math.min(Number(params.get('limit')) || 30, 100),
     offset: Number(params.get('offset')) || 0,
     readStatus: params.get('readStatus') || (unread === 'true' ? 'unread' : unread === 'false' ? 'read' : undefined),
@@ -819,17 +851,18 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     total = Number(countRows[0]?.values?.[0]?.[0] ?? 0);
   }
 
-  const searchOrder = plan.broadQuery
+  const useRelevanceOrder = Boolean(plan.broadQuery && filters.sort === 'relevance');
+  const searchOrder = useRelevanceOrder
     ? `ORDER BY
          CASE WHEN b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?) THEN 0 ELSE 1 END,
          CASE WHEN instr(lower(b.text), ?) > 0 THEN 0 ELSE 1 END,
          ${BOOKMARK_SEARCH_BM25_SQL} ASC,
-         CASE WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at ELSE b.posted_at END DESC`
+         CASE WHEN b.bookmarked_at LIKE '____-__-__%' THEN b.bookmarked_at ELSE b.posted_at END DESC`
     : bookmarkSortClause(filters.sort === 'asc' ? 'asc' : 'desc');
   const sql = `SELECT ${BOOKMARK_COLS} FROM bookmarks b
     ${plan.broadQuery ? 'JOIN bookmarks_fts ON bookmarks_fts.rowid = b.rowid' : ''}
     ${active.where} ${searchOrder} LIMIT ? OFFSET ?`;
-  const rankingParams = plan.broadQuery ? [plan.strictQuery, plan.phrase] : [];
+  const rankingParams = useRelevanceOrder ? [plan.strictQuery, plan.phrase] : [];
   const allParams = [...active.params, ...rankingParams, filters.limit!, filters.offset!];
   const rows = db.exec(sql, allParams);
   const bookmarks = (rows[0]?.values ?? []).map(mapRow);
@@ -882,7 +915,7 @@ function handleBookmarks(db: Database, params: URLSearchParams): unknown {
     limit: filters.limit,
     offset: filters.offset,
     order: {
-      mode: plan.broadQuery ? 'relevance' : 'x',
+      mode: useRelevanceOrder ? 'relevance' : 'x',
       direction: filters.sort === 'asc' ? 'asc' : 'desc',
       positioned,
       unpositioned: Math.max(0, total - positioned),
@@ -967,6 +1000,328 @@ function handleBookmarkById(db: Database, id: string): unknown {
   (bookmark as Record<string, unknown>).activation = getBookmarkActivationDetailsFromDb(db, id);
 
   return bookmark;
+}
+
+const HOME_RECALL_REASONS: Record<string, { label: string; detail: string }> = {
+  deliberate_practice: {
+    label: 'You chose to practice this',
+    detail: 'You deliberately added this idea from a workspace to your recall queue.',
+  },
+  overdue_review: {
+    label: 'Review you scheduled',
+    detail: 'You asked Xtreme to bring this back now.',
+  },
+  stale_claim: {
+    label: 'May need a fresh look',
+    detail: 'A claim connected to this source may be out of date.',
+  },
+  surprising_connection: {
+    label: 'Connects active work',
+    detail: 'This source supports more than one active workspace.',
+  },
+  active_project: {
+    label: 'Useful for active work',
+    detail: 'This source is connected to a workspace you are building.',
+  },
+  new_capture: {
+    label: 'Newly saved',
+    detail: 'A recent save that may be worth turning into working knowledge.',
+  },
+  forgotten_gem: {
+    label: 'Worth remembering',
+    detail: 'You saved this, but have not put it to use yet.',
+  },
+  worth_revisiting: {
+    label: 'Ready to revisit',
+    detail: 'This source has had enough time to become useful in a new context.',
+  },
+};
+
+type HomeWorkspace = BrainSpace & { combinedWorkspaceCount: number };
+
+function latestHomeTimestamp(values: Array<string | null>): string | null {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.localeCompare(a))[0] ?? null;
+}
+
+export function dedupeHomeWorkspaces(spaces: BrainSpace[]): HomeWorkspace[] {
+  const groups = new Map<string, BrainSpace[]>();
+  for (const space of spaces) {
+    const key = `${space.kind}\u001f${space.name.trim().toLowerCase()}`;
+    groups.set(key, [...(groups.get(key) ?? []), space]);
+  }
+
+  return [...groups.values()]
+    .map((group) => {
+      const recentFirst = [...group].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const canonical = group.find((space) => space.id === brainSlug(space.name)) ?? recentFirst[0];
+      const richest = recentFirst.find((space) => space.focusQuestion.trim() || space.description.trim()) ?? canonical;
+      const keywords = [...new Set(group.flatMap((space) => space.keywords))];
+
+      return {
+        ...canonical,
+        description: richest.description || canonical.description,
+        focusQuestion: richest.focusQuestion || canonical.focusQuestion,
+        keywords,
+        status: group.some((space) => space.status === 'active') ? 'active' : canonical.status,
+        updatedAt: latestHomeTimestamp(group.map((space) => space.updatedAt)) ?? canonical.updatedAt,
+        lastSeededAt: latestHomeTimestamp(group.map((space) => space.lastSeededAt)),
+        lastAgentRunAt: latestHomeTimestamp(group.map((space) => space.lastAgentRunAt)),
+        bookmarkCount: Math.max(...group.map((space) => space.bookmarkCount)),
+        repoCount: Math.max(...group.map((space) => space.repoCount)),
+        openFindings: Math.max(...group.map((space) => space.openFindings)),
+        combinedWorkspaceCount: group.length,
+      } satisfies HomeWorkspace;
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name));
+}
+
+export function buildHomeOverviewFromDb(db: Database): Record<string, unknown> {
+  ensureActivationSchema(db);
+  const queue = generateTodayQueueFromDb(db, { limit: 6 });
+  const recall = queue.flatMap((item) => {
+    const bookmark = handleBookmarkById(db, item.bookmarkId) as Record<string, unknown> | null;
+    if (!bookmark) return [];
+    const reason = HOME_RECALL_REASONS[item.reason] ?? HOME_RECALL_REASONS.worth_revisiting;
+    return [{
+      queueId: item.id,
+      bookmarkId: item.bookmarkId,
+      reason: item.reason,
+      reasonLabel: reason.label,
+      reasonDetail: reason.detail,
+      supportingReasons: item.scoreBreakdown
+        .filter((component) => component.points > 0)
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 3)
+        .map((component) => component.label),
+      bookmark,
+    }];
+  });
+  const practiceSources = recall.filter((item) => {
+    const bookmark = item.bookmark as Record<string, unknown>;
+    const activation = bookmark.activation as Record<string, unknown> | undefined;
+    const enrichment = activation?.enrichment as Record<string, unknown> | undefined;
+    return Boolean(String(enrichment?.keyClaim || enrichment?.summary || '').trim());
+  }).slice(0, 5);
+  const practiceSession = practiceSources.map((practiceSource) => {
+    const bookmark = practiceSource.bookmark as Record<string, unknown>;
+    const activation = bookmark.activation as Record<string, unknown> | undefined;
+    const enrichment = activation?.enrichment as Record<string, unknown> | undefined;
+    const entities = Array.isArray(enrichment?.entities)
+      ? enrichment.entities.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    const author = String(bookmark.authorHandle || bookmark.authorName || 'this source').replace(/^@/, '');
+    const normalizedAuthorValues = new Set([
+      author,
+      String(bookmark.authorName || ''),
+    ].map((value) => value.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, '')));
+    const topic = entities.find((entity) => (
+      !normalizedAuthorValues.has(entity.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, ''))
+    ));
+    return {
+      queueId: practiceSource.queueId,
+      bookmarkId: practiceSource.bookmarkId,
+      cue: topic
+        ? `What useful idea did you save about “${topic}”?`
+        : `What useful idea did you save from @${author}?`,
+      answer: String(enrichment?.keyClaim || enrichment?.summary || '').trim(),
+      whyItMatters: String(enrichment?.whyItMatters || '').trim(),
+      author: `@${author}`,
+      sourceUrl: String(bookmark.url || ''),
+    };
+  });
+  const practice = practiceSession[0] ?? null;
+
+  const spaces = listBrainSpacesFromDb(db);
+  const workspaceGroups = dedupeHomeWorkspaces(
+    spaces.filter((space) => space.status === 'active' || space.status === 'incubating'),
+  );
+  const activeWorkspaces = workspaceGroups.slice(0, 6).map(space => ({
+    ...space, understanding: workingUnderstandingFromDb(db, space.id)[0] || null,
+  }));
+  const cycle = getBrainCycleStatusFromDb(db) as {
+    latest?: Record<string, unknown> | null;
+    enriched?: number;
+    pending?: number;
+    staleClaims?: number;
+    candidateContradictions?: number;
+  };
+  const workspacesWithFindings = workspaceGroups.filter((space) => space.openFindings > 0);
+  const openFindings = workspacesWithFindings.reduce((sum, space) => sum + space.openFindings, 0);
+  const lastSyncAt = db.exec('SELECT MAX(synced_at) FROM bookmarks')[0]?.values[0]?.[0] ?? null;
+  const total = Number(db.exec('SELECT COUNT(*) FROM bookmarks')[0]?.values[0]?.[0] ?? 0);
+  const unread = Number(db.exec(
+    `SELECT COUNT(*) FROM bookmarks
+     WHERE id NOT IN (SELECT bookmark_id FROM bookmark_read_status WHERE is_read = 1)`,
+  )[0]?.values[0]?.[0] ?? 0);
+  const activityLabels: Record<string, string> = {
+    asked: 'Asked about a saved source',
+    copied: 'Copied research into active work',
+    highlighted: 'Highlighted an important passage',
+    made: 'Created a reusable research output',
+    note_updated: 'Updated a source note',
+    profile_updated: 'Clarified why a source matters',
+    project_added: 'Filed a source into a workspace',
+    read: 'Reviewed a saved source',
+    recall_again: 'Scheduled an idea for more practice',
+    reviewed: 'Remembered an idea',
+    today_done: 'Put a saved source to use',
+  };
+  const activityRows = db.exec(
+    `SELECT e.event_type, e.occurred_at, b.author_handle, b.author_name
+     FROM activation_events e
+     LEFT JOIN bookmarks b ON b.id = e.bookmark_id
+     WHERE e.event_type IN (${Object.keys(activityLabels).map(() => '?').join(',')})
+     ORDER BY e.occurred_at DESC, e.id DESC
+     LIMIT 8`,
+    Object.keys(activityLabels),
+  )[0]?.values ?? [];
+  const recentProgress: Array<Record<string, unknown>> = activityRows.map((row) => {
+    const handle = String(row[2] || '').replace(/^@/, '');
+    const name = String(row[3] || '').trim();
+    return {
+      type: String(row[0]),
+      title: activityLabels[String(row[0])] ?? 'Updated working knowledge',
+      detail: handle ? `Source from @${handle}` : (name ? `Source from ${name}` : 'Saved locally'),
+      occurredAt: String(row[1]),
+    };
+  });
+  const cycleRows = db.exec(
+    `SELECT finished_at, enriched, claims_created, relations_created
+     FROM activation_cycle_runs
+     WHERE status IN ('success', 'completed') AND finished_at IS NOT NULL
+     ORDER BY finished_at DESC LIMIT 1`,
+  )[0]?.values ?? [];
+  if (cycleRows[0]) {
+    recentProgress.push({
+      type: 'knowledge_update',
+      title: 'Compiled saved sources into working knowledge',
+      detail: `${fmtHomeCount(Number(cycleRows[0][1] ?? 0))} summaries · ${fmtHomeCount(Number(cycleRows[0][2] ?? 0))} claims · ${fmtHomeCount(Number(cycleRows[0][3] ?? 0))} connections`,
+      occurredAt: String(cycleRows[0][0]),
+    });
+  }
+  if (lastSyncAt) {
+    recentProgress.push({
+      type: 'sync',
+      title: 'Synced the bookmark archive',
+      detail: `${fmtHomeCount(total)} saved sources are available locally`,
+      occurredAt: String(lastSyncAt),
+    });
+  }
+  recentProgress.sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt)));
+  const progressKeys = new Set<string>();
+  const distinctProgress = recentProgress.filter((item) => {
+    const key = `${item.type}\u001f${item.detail}`;
+    if (progressKeys.has(key)) return false;
+    progressKeys.add(key);
+    return true;
+  });
+
+  const attention: Array<Record<string, unknown>> = [];
+  if (!activeWorkspaces.length) {
+    attention.push({
+      id: 'workspace',
+      tone: 'info',
+      icon: 'folder-plus',
+      title: 'Give your research a purpose',
+      detail: 'Create a workspace for a project, decision, person, or question. Xtreme will gather the relevant sources.',
+      action: { type: 'navigate', view: 'topics', label: 'Create a workspace' },
+    });
+  }
+  if (openFindings > 0) {
+    attention.push({
+      id: 'findings',
+      tone: 'info',
+      icon: 'bell',
+      title: 'Workspace updates are ready',
+      detail: `${fmtHomeCount(openFindings)} open update${openFindings === 1 ? '' : 's'} across ${workspacesWithFindings.slice(0, 2).map((space) => space.name).join(' and ')}. Review what changed and decide what belongs in the current picture.`,
+      action: { type: 'navigate', view: 'topics', label: 'Review updates' },
+    });
+  }
+  if ((cycle.staleClaims ?? 0) > 0) {
+    attention.push({
+      id: 'stale',
+      tone: 'warning',
+      icon: 'clock-3',
+      title: 'Freshness review recommended',
+      detail: `${fmtHomeCount(cycle.staleClaims ?? 0)} extracted claims have passed their review window. Start with decisions and active workspaces instead of reviewing everything.`,
+      action: {
+        type: 'ask',
+        label: 'Check what changed',
+        prompt: 'Which saved claims are most likely to be stale? Prioritize the consequential ones, show their original sources, and recommend what I should verify next.',
+      },
+    });
+  }
+  if ((cycle.candidateContradictions ?? 0) > 0) {
+    attention.push({
+      id: 'contradictions',
+      tone: 'warning',
+      icon: 'split',
+      title: 'Compare conflicting claims',
+      detail: `${fmtHomeCount(cycle.candidateContradictions ?? 0)} machine-detected claim pairs need an evidence review before you rely on them.`,
+      action: {
+        type: 'ask',
+        label: 'Review contradictions',
+        prompt: 'Show me the most important contradictions in my saved knowledge. Compare the evidence, explain what changed, and tell me what still needs verification.',
+      },
+    });
+  }
+  if ((cycle.pending ?? 0) > 0) {
+    attention.push({
+      id: 'enrichment',
+      tone: 'neutral',
+      icon: 'sparkles',
+      title: 'Build more working knowledge',
+      detail: `${fmtHomeCount(cycle.pending ?? 0)} sources can still be summarized, connected, and checked for useful claims.`,
+      action: { type: 'brain-cycle', label: 'Update knowledge' },
+    });
+  }
+
+  const workspacePrompts = activeWorkspaces.slice(0, 2).map((space) => ({
+    label: space.name,
+    prompt: space.focusQuestion
+      ? `Help me make progress on ${space.name}. Start with this focus question: ${space.focusQuestion}. Synthesize what I know, identify gaps, and recommend the next three actions.`
+      : `What do my saved sources say about ${space.name}? Give me the current picture, important disagreements, missing context, and the next three useful actions.`,
+  }));
+  const prompts = [
+    ...workspacePrompts,
+    {
+      label: 'Find forgotten value',
+      prompt: 'Find useful ideas in my archive that I saved but never put to work. Group them by opportunity and recommend one concrete action for each.',
+    },
+    {
+      label: 'Connect the dots',
+      prompt: 'What non-obvious connections are emerging across my recent bookmarks, notes, and active workspaces? Cite the evidence and explain why each connection matters.',
+    },
+    {
+      label: 'Turn research into action',
+      prompt: 'Review my strongest recent research and turn it into a prioritized action plan with clear steps, evidence, risks, and open questions.',
+    },
+  ].slice(0, 5);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    practice,
+    practiceSession,
+    recall,
+    workspaces: activeWorkspaces,
+    attention: attention.slice(0, 4),
+    recentProgress: distinctProgress.slice(0, 6),
+    prompts,
+    status: {
+      total,
+      unread,
+      enriched: cycle.enriched ?? 0,
+      pending: cycle.pending ?? 0,
+      lastSyncAt,
+      lastKnowledgeUpdateAt: cycle.latest?.finishedAt ?? null,
+    },
+  };
+}
+
+function fmtHomeCount(value: number): string {
+  return Math.max(0, value).toLocaleString('en-US');
 }
 
 function handleStats(db: Database): unknown {
@@ -1874,8 +2229,9 @@ async function handleApi(
       try {
         let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
         let lastBrowserError: unknown;
+        let successfulBrowserId: string | undefined;
 
-        for (const browserId of installedBrowserIds()) {
+        for (const browserId of resolveBrowserAttemptOrder(installedBrowserIds(), state?.preferredBrowserId)) {
           const browser = getBrowser(browserId);
           send('status', { stage: 'syncing', message: `Trying ${browser.displayName} session...` });
           try {
@@ -1884,6 +2240,7 @@ async function handleApi(
               send('progress', s);
             }, grabMode);
             syncResult = await syncBookmarksGraphQL({ ...options, abortSignal: abortController.signal });
+            successfulBrowserId = browserId;
             break;
           } catch (browserErr) {
             if (!isBrowserSessionFailure(browserErr)) throw browserErr;
@@ -1894,7 +2251,7 @@ async function handleApi(
         if (!syncResult) {
           send('status', { stage: 'syncing', message: 'Browser sessions were unavailable. Trying OAuth API...' });
           try {
-            const apiResult = await syncTwitterBookmarks('incremental', { targetAdds: 50 });
+            const apiResult = await syncTwitterBookmarks('incremental');
             send('progress', { added: apiResult.added, newAdded: apiResult.added, totalFetched: apiResult.totalBookmarks, running: false, done: true, stopReason: 'oauth api fallback' });
             send('status', { stage: apiResult.added > 0 ? 'indexing' : 'complete', message: apiResult.added > 0 ? 'Indexing...' : 'Done.' });
             if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state, true);
@@ -1932,13 +2289,14 @@ async function handleApi(
           }
         }
 
-        const shouldRebuild = syncResult.added > 0 || syncResult.bookmarkedAtRepaired > 0;
+        const shouldRebuild = syncResult.added > 0 || syncResult.changed > 0 || syncResult.bookmarkedAtRepaired > 0;
         send('status', { stage: shouldRebuild ? 'indexing' : 'complete', message: shouldRebuild ? 'Indexing...' : 'Done.' });
         if (shouldRebuild) {
           await rebuildIndexAndReload(dbPath, state, syncResult.bookmarkedAtRepaired === 0);
         }
         send('done', syncResult);
         if (state) {
+          state.preferredBrowserId = successfulBrowserId;
           if (syncResult.incomplete) {
             state.lastGrabError = syncResult.stopReason;
           } else {
@@ -1999,10 +2357,44 @@ async function handleApi(
       }
     }
 
-    // ── 2nd Brain API endpoints ─────────────────────────────────────────
+    // ── Home and 2nd Brain API endpoints ────────────────────────────────
+
+    if (req.method === 'GET' && pathname === '/api/home') {
+      sendJson(res, buildHomeOverviewFromDb(db));
+      return;
+    }
+
+    const homeRecallMatch = pathname.match(/^\/api\/home\/recall\/(\d+)$/);
+    if (homeRecallMatch && req.method === 'POST') {
+      const queueId = Number(homeRecallMatch[1]);
+      const body = JSON.parse(await parseBody(req)) as {
+        action?: 'done' | 'dismiss' | 'snooze' | 'again' | 'hard' | 'remembered';
+        snoozedUntil?: string | null;
+        response?: string;
+      };
+      if (!body.action || !['done', 'dismiss', 'snooze', 'again', 'hard', 'remembered'].includes(body.action)) {
+        sendError(res, 'action must be done, dismiss, snooze, again, hard, or remembered', 400);
+        return;
+      }
+      const review = body.action === 'again' || body.action === 'hard' || body.action === 'remembered'
+        ? reviewRecallQueueItemFromDb(db, queueId, body.action, Date.now(), body.response || '')
+        : null;
+      const item = review?.item ?? (
+        body.action === 'done' || body.action === 'dismiss' || body.action === 'snooze'
+          ? updateTodayQueueItemFromDb(db, queueId, body.action, body.snoozedUntil)
+          : null
+      );
+      if (!item) {
+        sendError(res, 'Recall item not found', 404);
+        return;
+      }
+      saveDb(db, dbPath);
+      sendJson(res, { success: true, item });
+      return;
+    }
 
     if (req.method === 'GET' && pathname === '/api/brain/dashboard') {
-      sendJson(res, await brainDashboard());
+      sendJson(res, brainDashboardFromDb(db));
       return;
     }
 
@@ -2380,6 +2772,17 @@ async function handleApi(
       return;
     }
 
+    const understandingMatch = pathname.match(/^\/api\/brain\/spaces\/([^/]+)\/understanding$/);
+    if (understandingMatch && req.method === 'POST') {
+      try {
+        const record = await saveWorkingUnderstanding(decodeURIComponent(understandingMatch[1]), JSON.parse(await parseBody(req)));
+        sendJson(res, { record });
+      } catch (error) {
+        sendJson(res, { error: error instanceof Error ? error.message : 'Could not save understanding' }, 400);
+      }
+      return;
+    }
+
     const brainSpaceMatch = pathname.match(/^\/api\/brain\/spaces\/([^/]+)$/);
     if (brainSpaceMatch && req.method === 'PATCH') {
       const id = decodeURIComponent(brainSpaceMatch[1]);
@@ -2432,6 +2835,30 @@ async function handleApi(
       return;
     }
 
+    const brainBriefMatch = pathname.match(/^\/api\/brain\/spaces\/([^/]+)\/brief$/);
+    if (brainBriefMatch && req.method === 'GET') {
+      sendJson(res, { brief: brainWorkspaceBriefFromDb(db, decodeURIComponent(brainBriefMatch[1])) });
+      return;
+    }
+
+    const brainPracticeMatch = pathname.match(/^\/api\/brain\/spaces\/([^/]+)\/practice\/([^/]+)$/);
+    if (brainPracticeMatch && req.method === 'POST') {
+      const spaceId = decodeURIComponent(brainPracticeMatch[1]);
+      const bookmarkId = decodeURIComponent(brainPracticeMatch[2]);
+      const belongsToSpace = db.exec(
+        `SELECT 1 FROM brain_space_bookmarks WHERE space_id = ? AND bookmark_id = ? LIMIT 1`,
+        [spaceId, bookmarkId],
+      )[0]?.values.length;
+      if (!belongsToSpace) {
+        sendError(res, 'Bookmark is not part of this workspace', 404);
+        return;
+      }
+      const item = queueBookmarkForRecallFromDb(db, bookmarkId);
+      saveDb(db, dbPath);
+      sendJson(res, { success: true, item });
+      return;
+    }
+
     const brainBookmarkDeleteMatch = pathname.match(/^\/api\/brain\/spaces\/([^/]+)\/bookmarks\/([^/]+)$/);
     if (brainBookmarkDeleteMatch && req.method === 'DELETE') {
       await removeBrainBookmark(decodeURIComponent(brainBookmarkDeleteMatch[1]), decodeURIComponent(brainBookmarkDeleteMatch[2]));
@@ -2464,12 +2891,36 @@ async function handleApi(
     }
 
     if (req.method === 'GET' && pathname === '/api/brain/agents/findings') {
+      const decisionParam = url.searchParams.get('decision');
+      const decision = decisionParam === 'open' || decisionParam === 'accepted' || decisionParam === 'dismissed'
+        ? decisionParam
+        : undefined;
       sendJson(res, {
         findings: await listBrainFindings(
           Number(url.searchParams.get('limit')) || 50,
           url.searchParams.get('open') === 'true',
+          decision,
         ),
       });
+      return;
+    }
+
+    const brainFindingMatch = pathname.match(/^\/api\/brain\/agents\/findings\/(\d+)$/);
+    if (brainFindingMatch && req.method === 'PATCH') {
+      const body = JSON.parse(await parseBody(req)) as {
+        decision?: 'accepted' | 'dismissed';
+        title?: string;
+        detail?: string;
+        note?: string;
+      };
+      if (body.decision !== 'accepted' && body.decision !== 'dismissed') {
+        sendError(res, 'decision must be accepted or dismissed', 400);
+        return;
+      }
+      sendJson(res, await decideBrainFinding(Number(brainFindingMatch[1]), {
+        ...body,
+        decision: body.decision,
+      }));
       return;
     }
 
@@ -2731,8 +3182,33 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
   state.grabRunning = true;
   state.grabStartedAt = new Date().toISOString();
   try {
-    const syncResult = await syncBookmarksGraphQL({ incremental: true, maxPages: 50, delayMs: 600, maxMinutes: 5 });
-    if (syncResult.added > 0) {
+    let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
+    let lastBrowserError: unknown;
+
+    for (const browserId of resolveBrowserAttemptOrder(installedBrowserIds(), state.preferredBrowserId)) {
+      try {
+        syncResult = await syncBookmarksGraphQL({
+          incremental: true,
+          maxPages: 50,
+          delayMs: 600,
+          maxMinutes: 5,
+          browser: browserId,
+        });
+        state.preferredBrowserId = browserId;
+        break;
+      } catch (browserErr) {
+        if (!isBrowserSessionFailure(browserErr)) throw browserErr;
+        lastBrowserError = browserErr;
+      }
+    }
+
+    if (!syncResult) {
+      const detail = lastBrowserError instanceof Error
+        ? lastBrowserError.message
+        : 'No supported signed-in browser profile was found.';
+      throw new Error(`Could not sync from any installed browser session. Last error: ${detail}`);
+    }
+    if (syncResult.added > 0 || syncResult.changed > 0) {
       await rebuildIndexAndReload(dbPath, state, true);
     }
     if (syncResult.incomplete) {
@@ -2819,6 +3295,12 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   initBrainSchema(state.db);
   ensureActivationSchema(state.db);
   initXStreamSchema(state.db);
+  const duplicateWorkspaceGroups = await findExactDuplicateBrainSpaceGroupsFromDb(state.db);
+  if (duplicateWorkspaceGroups.length) {
+    backupDb(dbPath, 'before-workspace-dedupe-v1');
+    const consolidated = consolidateExactDuplicateBrainSpacesFromDb(state.db, duplicateWorkspaceGroups);
+    console.log(`  Workspaces: consolidated ${consolidated} exact historical duplicate${consolidated === 1 ? '' : 's'}.`);
+  }
 
   // Tables
   state.db.run(`CREATE TABLE IF NOT EXISTS bookmark_notes (bookmark_id TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT NOT NULL)`);

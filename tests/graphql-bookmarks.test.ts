@@ -433,13 +433,45 @@ test('syncBookmarksGraphQL invalidates cached browser credentials on 401 without
   }
 });
 
-test('syncBookmarksGraphQL scans past a familiar page to catch interleaved new bookmarks', async () => {
+test('syncBookmarksGraphQL invalidates cached credentials on HTTP 200 GraphQL auth errors', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-auth-json-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  const cachePath = browserSessionCachePath();
+  await writeFile(cachePath, JSON.stringify({
+    browserId: 'chrome',
+    csrfToken: 'cached-csrf-secret',
+    cookieHeader: 'ct0=cached-csrf-secret; auth_token=cached-auth-secret',
+    savedAt: Date.now(),
+  }));
+  globalThis.fetch = async () => Response.json({ errors: [{ code: 32, message: 'Could not authenticate you' }] });
+
+  try {
+    await assert.rejects(
+      syncBookmarksGraphQL({
+        csrfToken: 'request-csrf-secret',
+        cookieHeader: 'ct0=request-csrf-secret; auth_token=request-auth-secret',
+        maxPages: 1,
+        delayMs: 0,
+      }),
+      /could not authenticate the browser session/i,
+    );
+    await assert.rejects(access(cachePath), (err: NodeJS.ErrnoException) => err.code === 'ENOENT');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('syncBookmarksGraphQL scans past familiar X positions to catch interleaved new bookmarks', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-overlap-'));
   const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
   const previousFetch = globalThis.fetch;
   process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
 
-  const existing = ['100', '90', '80'].map((id) => makeRecord({ id, tweetId: id }));
+  const existing = ['100', '90', '80'].map((id) => makeRecord({ id, tweetId: id, sortIndex: `9000000000000000${id}` }));
   await writeFile(path.join(dir, 'bookmarks.jsonl'), existing.map((record) => JSON.stringify(record)).join('\n') + '\n');
 
   const tweet = (id: string) => makeTweetResult({
@@ -457,7 +489,12 @@ test('syncBookmarksGraphQL scans past a familiar page to catch interleaved new b
     requests += 1;
     const url = new URL(String(input));
     const variables = JSON.parse(url.searchParams.get('variables') || '{}');
-    return Response.json(pages.get(String(variables.cursor ?? '')));
+    const response = pages.get(String(variables.cursor ?? ''));
+    for (const entry of response.data.bookmark_timeline_v2.timeline.instructions[0].entries) {
+      const id = entry.content.itemContent?.tweet_results.result.rest_id;
+      if (id) entry.sortIndex = `9000000000000000${id}`;
+    }
+    return Response.json(response);
   };
 
   try {
@@ -476,6 +513,98 @@ test('syncBookmarksGraphQL scans past a familiar page to catch interleaved new b
     assert.equal(result.stopReason, 'caught up after stable overlap');
     assert.equal(result.incomplete, undefined);
     assert.ok(saved.some((record) => record.id === '110'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('full scans ignore overlap and limited scans report incomplete with a resume cursor', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-scan-completion-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  await writeFile(path.join(dir, 'bookmarks.jsonl'), JSON.stringify(makeRecord({ id: '100', tweetId: '100' })) + '\n');
+  globalThis.fetch = async (input) => {
+    const variables = JSON.parse(new URL(String(input)).searchParams.get('variables') || '{}');
+    const id = variables.cursor ? '110' : '100';
+    return Response.json(makeGraphQLResponse([makeTweetResult({ legacy: { id_str: id }, tweet: { rest_id: id } })], variables.cursor ? undefined : 'next-page'));
+  };
+  try {
+    const limited = await syncBookmarksGraphQL({ csrfToken: 'csrf', cookieHeader: 'ct0=csrf', maxPages: 1, delayMs: 0 });
+    assert.equal(limited.incomplete, true);
+    assert.equal(limited.stopReason, 'max pages reached');
+    const state = JSON.parse(await readFile(limited.statePath, 'utf8'));
+    assert.equal(state.lastCursor, 'next-page');
+    const complete = await syncBookmarksGraphQL({ csrfToken: 'csrf', cookieHeader: 'ct0=csrf', incremental: false, stalePageLimit: 1, maxPages: 5, delayMs: 0 });
+    assert.equal(complete.pages, 2);
+    assert.equal(complete.added, 1);
+    assert.equal(complete.incomplete, undefined);
+    assert.equal(complete.stopReason, 'end of bookmarks');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('syncBookmarksGraphQL does not miss a new bookmark after three stale pages', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-deep-overlap-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  const existing = ['100', '90', '80'].map((id) => makeRecord({ id, tweetId: id }));
+  await writeFile(path.join(dir, 'bookmarks.jsonl'), existing.map((record) => JSON.stringify(record)).join('\n') + '\n');
+  const tweet = (id: string) => makeTweetResult({ legacy: { id_str: id }, tweet: { rest_id: id } });
+  const pages = new Map<string, any>([
+    ['', makeGraphQLResponse([tweet('100')], 'cursor-1')],
+    ['cursor-1', makeGraphQLResponse([tweet('90')], 'cursor-2')],
+    ['cursor-2', makeGraphQLResponse([tweet('80')], 'cursor-3')],
+    ['cursor-3', makeGraphQLResponse([tweet('110')])],
+  ]);
+  globalThis.fetch = async (input) => {
+    const variables = JSON.parse(new URL(String(input)).searchParams.get('variables') || '{}');
+    return Response.json(pages.get(String(variables.cursor ?? '')));
+  };
+
+  try {
+    const result = await syncBookmarksGraphQL({
+      csrfToken: 'csrf',
+      cookieHeader: 'ct0=csrf; auth_token=token',
+      delayMs: 0,
+      maxPages: 10,
+    });
+    assert.equal(result.added, 1);
+    assert.equal(result.pages, 4);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('syncBookmarksGraphQL refreshes an existing X position with zero additions', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-position-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  await writeFile(path.join(dir, 'bookmarks.jsonl'), `${JSON.stringify(makeRecord({ id: '100', tweetId: '100', sortIndex: '500' }))}\n`);
+  const response = makeGraphQLResponse([makeTweetResult({ legacy: { id_str: '100' }, tweet: { rest_id: '100' } })]);
+  response.data.bookmark_timeline_v2.timeline.instructions[0].entries[0].sortIndex = '700';
+  globalThis.fetch = async () => Response.json(response);
+
+  try {
+    const result = await syncBookmarksGraphQL({
+      csrfToken: 'csrf',
+      cookieHeader: 'ct0=csrf; auth_token=token',
+      delayMs: 0,
+      maxPages: 2,
+    });
+    assert.equal(result.added, 0);
+    assert.equal(result.changed, 1);
+    const saved = JSON.parse((await readFile(path.join(dir, 'bookmarks.jsonl'), 'utf8')).trim());
+    assert.equal(saved.sortIndex, '700');
   } finally {
     globalThis.fetch = previousFetch;
     if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
@@ -515,6 +644,41 @@ test('syncBookmarksGraphQL saves fetched bookmarks when a later page is interrup
     assert.equal(result.incomplete, true);
     assert.match(result.stopReason, /interrupted after 1 page.*400/);
     assert.ok(saved.some((record) => record.id === '110'));
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
+    else process.env.XTREME_BOOKMARKS_DATA_DIR = previousDir;
+  }
+});
+
+test('syncBookmarksGraphQL persists resume cursor when interrupted after a zero-add page', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'xb-graphql-zero-add-resume-'));
+  const previousDir = process.env.XTREME_BOOKMARKS_DATA_DIR;
+  const previousFetch = globalThis.fetch;
+  process.env.XTREME_BOOKMARKS_DATA_DIR = dir;
+  await writeFile(path.join(dir, 'bookmarks.jsonl'), `${JSON.stringify(makeRecord({ id: '100', tweetId: '100' }))}\n`);
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    if (requests === 1) {
+      return Response.json(makeGraphQLResponse([
+        makeTweetResult({ legacy: { id_str: '100' }, tweet: { rest_id: '100' } }),
+      ], 'cursor-1'));
+    }
+    return new Response('temporary upstream failure', { status: 400 });
+  };
+
+  try {
+    const result = await syncBookmarksGraphQL({
+      csrfToken: 'csrf',
+      cookieHeader: 'ct0=csrf; auth_token=token',
+      delayMs: 0,
+      maxPages: 10,
+    });
+    const state = JSON.parse(await readFile(path.join(dir, 'bookmarks-backfill-state.json'), 'utf8'));
+    assert.equal(result.added, 0);
+    assert.equal(result.incomplete, true);
+    assert.equal(state.lastCursor, 'cursor-1');
   } finally {
     globalThis.fetch = previousFetch;
     if (previousDir === undefined) delete process.env.XTREME_BOOKMARKS_DATA_DIR;
@@ -746,6 +910,7 @@ test('sanitizeBookmarkedAt: clears GraphQL bookmark dates even when they look pl
 test('formatSyncResult: formats all fields', () => {
   const result = formatSyncResult({
     added: 50,
+    changed: 3,
     bookmarkedAtRepaired: 7,
     totalBookmarks: 6000,
     bookmarkedAtMissing: 12,

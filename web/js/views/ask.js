@@ -18,6 +18,7 @@ const SUGGESTIONS = [
 ];
 
 const LS_HISTORY = 'xb.v2.ask.history';
+const ASK_BROWSER_TIMEOUT_MS = 200_000;
 const ARTIFACT_LABELS = {
   brief: 'Brief',
   checklist: 'Action plan',
@@ -215,8 +216,18 @@ export function AskView(root) {
     $$('[data-ask-evidence]', els.transcript).forEach((btn) => btn.addEventListener('click', () => {
       const item = convo.flatMap((turn) => turn.evidence || []).find((entry) => entry.itemId === btn.dataset.askEvidence);
       if (!item) return;
+      if (['bookmark', 'note', 'highlight'].includes(item.kind)) {
+        document.dispatchEvent(new CustomEvent('xb:navigate', {
+          detail: { view: 'library', bookmarkId: item.itemId },
+        }));
+        return;
+      }
+      if (item.kind === 'concept' && item.provenance?.sourceId) {
+        openWiki(item.provenance.sourceId);
+        return;
+      }
       document.dispatchEvent(new CustomEvent('xb:navigate', {
-        detail: { view: 'library', filter: { q: String(item.excerpt || item.title || '').slice(0, 120) } },
+        detail: { view: 'topics' },
       }));
     }));
     $$('.ask-make-action', els.transcript).forEach((btn) => btn.addEventListener('click', async () => {
@@ -417,7 +428,7 @@ export function AskView(root) {
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, 90_000);
+    }, ASK_BROWSER_TIMEOUT_MS);
     const topicId = scope?.startsWith('topic:') ? scope.slice('topic:'.length) : null;
     const priorTurns = conversation
       .filter((entry) => entry !== turn && entry.answer)
@@ -546,6 +557,7 @@ export function AskView(root) {
   });
 
   function prefill(payload = {}) {
+    if (typeof payload === 'string') payload = { question: payload };
     if (payload.question) {
       els.input.value = payload.question;
       autoGrow();
