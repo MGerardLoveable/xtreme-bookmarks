@@ -52,6 +52,12 @@ test('Inbox filters by local capture time without changing posted-date filters',
   assert.deepEqual(captured.params, ['2026-07-01T00:00:00.000Z']);
 });
 
+test('headless bookmark grab includes a cached browser without an installed profile', () => {
+  assert.deepEqual(resolveBrowserAttemptOrder([], undefined, 'chrome'), ['chrome']);
+  assert.deepEqual(resolveBrowserAttemptOrder(['chrome', 'edge'], 'edge', 'chrome'), ['edge', 'chrome']);
+  assert.deepEqual(resolveBrowserAttemptOrder([], undefined, 'unknown-browser'), []);
+});
+
 test('bookmark list sort keeps relevance as an explicit search mode', () => {
   assert.equal(resolveBookmarkListSort('relevance'), 'relevance');
   assert.equal(resolveBookmarkListSort('newest'), 'desc');

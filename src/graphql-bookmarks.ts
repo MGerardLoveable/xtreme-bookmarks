@@ -1,6 +1,6 @@
 import { ensureDir, readJsonLines, writeJsonLines, readJson, writeJson, pathExists } from './fs.js';
 import { ensureDataDir, twitterBookmarksCachePath, twitterBookmarksMetaPath, twitterBackfillStatePath, browserSessionCachePath } from './paths.js';
-import { loadChromeSessionConfig } from './config.js';
+import { loadChromeSessionConfig, loadEnv } from './config.js';
 import { extractChromeXCookies } from './chrome-cookies.js';
 import { extractFirefoxXCookies } from './firefox-cookies.js';
 import { parseTimestampMs } from './date-utils.js';
@@ -20,6 +20,28 @@ interface CachedSessionCookies {
 }
 
 let cachedSessionCookies: CachedSessionCookies | null = null;
+
+export async function cachedXSessionBrowserId(): Promise<string | undefined> {
+  loadEnv();
+  const configured = await loadConfiguredServerSession();
+  if (configured) return 'chrome';
+  const cache = await loadAnyCachedSessionCookies();
+  return cache?.browserId;
+}
+
+async function loadConfiguredServerSession(): Promise<{ csrfToken: string; cookieHeader: string } | null> {
+  const file = process.env.XB_X_SESSION_FILE;
+  if (!file) return null;
+  const value = await readJson<Record<string, unknown>>(file);
+  if (!value || typeof value.csrfToken !== 'string' || !value.csrfToken.trim()
+    || typeof value.cookieHeader !== 'string' || !value.cookieHeader.trim()
+    || /[\r\n]/.test(value.csrfToken + value.cookieHeader)) {
+    throw new Error('The configured X session file is invalid. Reconnect your X account.');
+  }
+  // Explicit server credentials are checked by X on each request. Unlike a
+  // browser cache, they cannot be refreshed from a local desktop profile.
+  return { csrfToken: value.csrfToken, cookieHeader: value.cookieHeader };
+}
 
 function isUsableSessionCache(
   cache: CachedSessionCookies | null,
@@ -308,6 +330,10 @@ export async function loadXGraphQLSession(
       cookieHeader: options.cookieHeader ?? `ct0=${options.csrfToken}`,
     };
   }
+
+  loadEnv();
+  const configured = await loadConfiguredServerSession();
+  if (configured) return configured;
 
   const config = loadChromeSessionConfig({ browserId: options.browser });
   const chromeProfile = options.chromeProfileDirectory ?? config.chromeProfileDirectory;

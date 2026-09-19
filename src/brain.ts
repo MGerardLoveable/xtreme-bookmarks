@@ -478,6 +478,14 @@ export function initBrainSchema(db: Database): void {
   try { db.run(`ALTER TABLE brain_spaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'project'`); } catch {}
   try { db.run(`ALTER TABLE brain_spaces ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
   try { db.run(`ALTER TABLE brain_spaces ADD COLUMN focus_question TEXT NOT NULL DEFAULT ''`); } catch {}
+  // Managed workspace pages travel with the data directory, not the old host.
+  for (const [id, previousPath] of db.exec('SELECT id, page_path FROM brain_spaces')[0]?.values ?? []) {
+    if (typeof id !== 'string' || !/^[a-z0-9_-]+$/i.test(id)) continue;
+    const currentPath = spacePagePath(id);
+    if (previousPath !== currentPath) {
+      db.run('UPDATE brain_spaces SET page_path = ? WHERE id = ?', [currentPath, id]);
+    }
+  }
   db.run(`CREATE TABLE IF NOT EXISTS brain_space_bookmarks (
     space_id TEXT NOT NULL REFERENCES brain_spaces(id) ON DELETE CASCADE,
     bookmark_id TEXT NOT NULL,

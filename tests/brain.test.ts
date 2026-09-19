@@ -17,6 +17,7 @@ import {
   diversifyBrainIdeas,
   findExactDuplicateBrainSpaceGroupsFromDb,
   listBrainSpacesFromDb,
+  initBrainSchema,
   listBrainFindingsFromDb,
   listBrainBookmarks,
   listBrainWorkflows,
@@ -34,6 +35,22 @@ import {
 } from '../src/brain.js';
 import { ensureActivationSchema } from '../src/activation.js';
 import { saveDb } from '../src/db.js';
+
+test('workspace page paths follow the current data directory after migration', async () => {
+  await withDataDir(async () => {
+    const space = await createBrainSpace({ name: 'Portable research' });
+    const { db } = await openBrainDb();
+    try {
+      db.run('UPDATE brain_spaces SET page_path = ? WHERE id = ?', ['/Users/old/mac/md/brain/portable-research.md', space.id]);
+      initBrainSchema(db);
+      const migrated = listBrainSpacesFromDb(db).find(s => s.id === space.id);
+      assert.equal(migrated?.pagePath, space.pagePath);
+      assert.equal(migrated?.name, 'Portable research');
+      initBrainSchema(db);
+      assert.equal(listBrainSpacesFromDb(db).find(s => s.id === space.id)?.pagePath, migrated?.pagePath);
+    } finally { db.close(); }
+  });
+});
 
 test('working understanding preserves revisions, evidence and searchable note bodies', async () => {
   await withDataDir(async () => {

@@ -1,0 +1,8 @@
+[Unit]
+Description=Consistent private Xtreme Bookmarks backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xtreme-bookmarks-backup
+TimeoutStartSec=15min
+UMask=0077

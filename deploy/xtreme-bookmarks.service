@@ -1,0 +1,27 @@
+[Unit]
+Description=Xtreme Bookmarks private research library
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xtreme-bookmarks
+Group=xtreme-bookmarks
+WorkingDirectory=/opt/xtreme-bookmarks
+EnvironmentFile=/etc/xtreme-bookmarks/service.env
+ExecStart=/usr/bin/node /opt/xtreme-bookmarks/bin/xb.mjs web --port 3848
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xtreme-bookmarks
+RestrictSUIDSGID=true
+Nice=10
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

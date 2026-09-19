@@ -9,7 +9,7 @@ import type { Database } from 'sql.js';
 import { backupDb, databaseIntegrity, listDbBackups, openDb, saveDb } from './db.js';
 import { twitterBookmarksIndexPath, mdDir, twitterBookmarksCachePath, twitterBackfillStatePath } from './paths.js';
 import { deleteTwitterBookmark, syncTwitterBookmarks } from './bookmarks.js';
-import { syncBookmarksGraphQL, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
+import { syncBookmarksGraphQL, cachedXSessionBrowserId, type SyncOptions, type SyncProgress } from './graphql-bookmarks.js';
 import {
   buildIndex,
   updateIndexIncrementally,
@@ -554,8 +554,10 @@ function installedBrowserIds(): string[] {
 export function resolveBrowserAttemptOrder(
   installed: string[],
   preferredBrowserId?: string,
+  cachedBrowserId?: string,
 ): string[] {
-  const unique = [...new Set(installed)];
+  const cached = cachedBrowserId && listBrowserIds().includes(cachedBrowserId) ? [cachedBrowserId] : [];
+  const unique = [...new Set([...cached, ...installed])];
   if (!preferredBrowserId || !unique.includes(preferredBrowserId)) return unique;
   return [preferredBrowserId, ...unique.filter(id => id !== preferredBrowserId)];
 }
@@ -2231,7 +2233,7 @@ async function handleApi(
         let lastBrowserError: unknown;
         let successfulBrowserId: string | undefined;
 
-        for (const browserId of resolveBrowserAttemptOrder(installedBrowserIds(), state?.preferredBrowserId)) {
+        for (const browserId of resolveBrowserAttemptOrder(installedBrowserIds(), state?.preferredBrowserId, await cachedXSessionBrowserId())) {
           const browser = getBrowser(browserId);
           send('status', { stage: 'syncing', message: `Trying ${browser.displayName} session...` });
           try {
@@ -3185,7 +3187,7 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
     let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
     let lastBrowserError: unknown;
 
-    for (const browserId of resolveBrowserAttemptOrder(installedBrowserIds(), state.preferredBrowserId)) {
+    for (const browserId of resolveBrowserAttemptOrder(installedBrowserIds(), state.preferredBrowserId, await cachedXSessionBrowserId())) {
       try {
         syncResult = await syncBookmarksGraphQL({
           incremental: true,

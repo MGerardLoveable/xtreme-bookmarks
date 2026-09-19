@@ -17,6 +17,7 @@ bookmarks.jsonl
 bookmarks.jsonl*
 bookmarks-meta.json
 browser-session-cache.json
+x-session.json
 bookmarks-backfill-state.json
 oauth-token.json
 media-manifest.json
