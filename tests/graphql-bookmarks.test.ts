@@ -19,6 +19,27 @@ import { browserSessionCachePath } from '../src/paths.js';
 
 const NOW = '2026-03-28T00:00:00.000Z';
 
+test('imports one highest-resolution link card image without publisher icons', () => {
+  const tweet = makeTweetResult({legacy:{extended_entities:{media:[]}},tweet:{card:{legacy:{binding_values:[
+    {key:'thumbnail_image',value:{image_value:{url:'https://pbs.twimg.com/card_img/small.jpg',width:100,height:50}}},
+    {key:'summary_photo_image_original',value:{image_value:{url:'https://pbs.twimg.com/card_img/large.jpg',width:800,height:400}}},
+    {key:'app_icon',value:{image_value:{url:'https://example.com/icon.jpg',width:2000,height:2000}}},
+  ]}}}});
+  const record = convertTweetToRecord(tweet, NOW)!;
+  assert.deepEqual(record.media, ['https://pbs.twimg.com/card_img/large.jpg']);
+  assert.equal(record.mediaObjects?.[0].width,800);
+  tweet.legacy.extended_entities.media = [{type:'photo',media_url_https:'https://pbs.twimg.com/media/attached.jpg'}] as any;
+  assert.deepEqual(convertTweetToRecord(tweet,NOW)!.media,['https://pbs.twimg.com/media/attached.jpg']);
+});
+
+test('imports quoted article covers and ignores unsafe preview URLs', () => {
+  const quote=makeTweetResult({legacy:{extended_entities:{media:[]}},tweet:{article:{article_results:{result:{cover_media:{media_info:{original_img_url:'https://pbs.twimg.com/media/cover.jpg'}}}}}}});
+  const tweet=makeTweetResult({tweet:{quoted_status_result:{result:quote}}});
+  assert.deepEqual(convertTweetToRecord(tweet,NOW)!.quotedTweet?.media,['https://pbs.twimg.com/media/cover.jpg']);
+  quote.article.article_results.result.cover_media.media_info.original_img_url='javascript:alert(1)';
+  assert.deepEqual(convertTweetToRecord(tweet,NOW)!.quotedTweet?.media,[]);
+});
+
 function makeTweetResult(overrides: Record<string, any> = {}) {
   return {
     rest_id: '1234567890',

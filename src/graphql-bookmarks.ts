@@ -299,6 +299,20 @@ async function loadExistingBookmarks(): Promise<{ records: BookmarkRecord[]; rep
   }
 }
 
+function previewMedia(tweet: any): any[] {
+  const bindings = tweet?.card?.legacy?.binding_values;
+  const entries = Array.isArray(bindings) ? bindings : Object.entries(bindings ?? {}).map(([key, value]) => ({ key, value }));
+  const images = entries.filter((entry: any) => /^(summary_photo_image|photo_image_full_size|thumbnail_image|player_image)(_|$)/.test(entry.key))
+    .map((entry: any) => entry.value?.image_value)
+    .filter((image: any) => typeof image?.url === 'string' && image.url.startsWith('https://'))
+    .sort((a: any, b: any) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0));
+  const cover = tweet?.article?.article_results?.result?.cover_media?.media_info;
+  const image = cover?.original_img_url ? { url: cover.original_img_url, width: cover.original_img_width, height: cover.original_img_height } : images[0];
+  return image && typeof image.url === 'string' && image.url.startsWith('https://')
+    ? [{ type: 'photo', media_url_https: image.url, original_info: { width: image.width, height: image.height } }]
+    : [];
+}
+
 function buildUrl(cursor?: string, count = 20): string {
   const variables: Record<string, unknown> = { count };
   if (cursor) variables.cursor = cursor;
@@ -410,7 +424,8 @@ export function convertTweetToRecord(tweetResult: any, now: string): BookmarkRec
       }
     : undefined;
 
-  const mediaEntities = legacy?.extended_entities?.media ?? legacy?.entities?.media ?? [];
+  const attachedMedia = legacy?.extended_entities?.media ?? legacy?.entities?.media ?? [];
+  const mediaEntities = attachedMedia.length ? attachedMedia : previewMedia(tweet);
   const media: string[] = mediaEntities
     .map((m: any) => m.media_url_https ?? m.media_url)
     .filter(Boolean);
@@ -443,7 +458,8 @@ export function convertTweetToRecord(tweetResult: any, now: string): BookmarkRec
       const qtId = qtLegacy.id_str ?? qtTweet?.rest_id;
       const qtUser = qtTweet?.core?.user_results?.result;
       const qtHandle = qtUser?.core?.screen_name ?? qtUser?.legacy?.screen_name;
-      const qtMediaEntities = qtLegacy?.extended_entities?.media ?? qtLegacy?.entities?.media ?? [];
+      const qtAttachedMedia = qtLegacy?.extended_entities?.media ?? qtLegacy?.entities?.media ?? [];
+      const qtMediaEntities = qtAttachedMedia.length ? qtAttachedMedia : previewMedia(qtTweet);
       quotedTweet = {
         id: qtId,
         text: qtLegacy.full_text ?? qtLegacy.text ?? '',

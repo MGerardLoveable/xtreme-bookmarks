@@ -297,6 +297,8 @@ body {
   background: #e7eae7;
 }
 .library-refined .bookmark-row-actions { right: 106px; bottom: 10px; }
+.library-refined .bookmark-row.no-media { grid-template-columns: 38px minmax(0, 1fr); }
+.library-refined .bookmark-row.no-media .bookmark-row-actions { right: 7px; }
 .row-action { border-radius: 5px; box-shadow: none; }
 
 .library-detail {

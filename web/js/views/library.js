@@ -80,7 +80,7 @@ function mediaImg(src) {
 
 function mediaThumb(mediaItems) {
   if (!mediaItems.length) {
-    return '<div class="bookmark-thumb bookmark-thumb-empty"><span data-icon="bookmark"></span></div>';
+    return '';
   }
   const shown = mediaItems.slice(0, 4);
   return `
@@ -597,7 +597,7 @@ export function LibraryView(root) {
       ? `<div class="search-match-context"><span>Quoted</span>${highlightSearchText(b.quotedText, searchTokens)}</div>`
       : '';
     const row = el('article', {
-      class: `bookmark-row${active ? ' active' : ''}${b.isRead ? ' read' : ''}`,
+      class: `bookmark-row${mediaItems.length ? '' : ' no-media'}${active ? ' active' : ''}${b.isRead ? ' read' : ''}`,
       dataset: { id: b.id, idx: String(idx) },
       tabindex: '0',
       'aria-label': `Open bookmark by ${b.authorName || b.authorHandle || 'Unknown'}`,
