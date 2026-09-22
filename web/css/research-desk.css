@@ -299,6 +299,79 @@ body {
 .library-refined .bookmark-row-actions { right: 106px; bottom: 10px; }
 .library-refined .bookmark-row.no-media { grid-template-columns: 38px minmax(0, 1fr); }
 .library-refined .bookmark-row.no-media .bookmark-row-actions { right: 7px; }
+
+/* Gallery owns its tracks; reading-mode rules must not size its cards. */
+.library-refined.mode-gallery .bookmark-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
+  grid-auto-rows: auto;
+  gap: 16px;
+  padding: 16px;
+  align-items: stretch;
+}
+.library-refined.mode-gallery .bookmark-row,
+.library-refined.mode-gallery .bookmark-row.no-media {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 160px minmax(148px, 1fr) 36px;
+  min-height: 394px;
+  gap: 12px;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.library-refined.mode-gallery .bookmark-thumb {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  height: 160px;
+  min-height: 0;
+  align-self: stretch;
+}
+.library-refined.mode-gallery .bookmark-body {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.library-refined.mode-gallery .bookmark-row.no-media .bookmark-body {
+  grid-row: 1 / 3;
+}
+.library-refined.mode-gallery .bookmark-meta {
+  flex-wrap: wrap;
+  align-content: start;
+  min-height: 36px;
+  gap: 4px 6px;
+}
+.library-refined.mode-gallery .bookmark-text {
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+.library-refined.mode-gallery .bookmark-row.no-media .bookmark-text {
+  -webkit-line-clamp: 10;
+  line-clamp: 10;
+}
+.library-refined.mode-gallery .bookmark-row .bookmark-row-actions {
+  grid-column: 1;
+  grid-row: 3;
+  position: static;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  align-self: end;
+  height: 36px;
+  opacity: 1;
+  transform: none;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
 .row-action { border-radius: 5px; box-shadow: none; }
 
 .library-detail {
