@@ -99,7 +99,7 @@ GitHub gap research returns candidate repositories for review and can add an acc
 
 ### Local extraction and performance
 
-For the file-backed database on Node.js 22.13+ (Node.js 24 recommended), set `XB_DB_DRIVER=native`. SQLite WAL persists individual page writes; backups use a consistent SQLite snapshot. Node.js 20 retains the existing WASM database path.
+For the file-backed database on Node.js 22.16+ (Node.js 24 recommended), set `XB_DB_DRIVER=native`. SQLite WAL persists individual page writes; backups use a consistent SQLite snapshot. Node.js 20 retains the existing WASM database path. The adapter requires the [Node.js array-returning SQLite statements](https://nodejs.org/docs/latest-v22.x/api/sqlite.html#statementsetreturnarraysenabled).
 
 The first server launch builds a unified full-text index. Local CPU models are downloaded from Hugging Face and cached under `data/models`; no embedding API key is needed. Semantic indexing catches up incrementally, prioritizing workspace and recent material. Exact text search remains available while indexing runs. Set `XB_SEMANTIC_SEARCH=0` to disable background embeddings; the Library's Text mode bypasses semantic retrieval.
 

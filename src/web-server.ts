@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { initResearchStore, importStart, importFinish } from './research-store.js';
 import { handleResearchApi, mcpAgentGrant } from './research-api.js';
-import { embedPendingSources, searchResearch } from './research-search.js';
+import { embedPendingSources, searchResearch, keywordBookmarkIds } from './research-search.js';
 import { enqueueEnrichment, processEnrichment, indexWikiSources } from './research-enrichment.js';
 import { createPlan, planMarkdown } from './research-intelligence.js';
 import fs from 'node:fs';
@@ -1628,22 +1628,28 @@ async function handleApi(
 
         if (req.method === 'GET' && pathname === '/api/bookmarks') {
       if (url.searchParams.get('q') && url.searchParams.get('searchMode') === 'smart') {
-        const result = await searchResearch(db, url.searchParams.get('q')!, {
+        const searchOptions = {
           author: url.searchParams.get('author') || undefined,category:url.searchParams.get('category')||undefined,
           domain:url.searchParams.get('domain')||undefined,collection:url.searchParams.get('collection')||undefined,
           readStatus:url.searchParams.get('readStatus')||undefined,after:url.searchParams.get('capturedAfter')||undefined,
           sort:url.searchParams.get('sort')||'relevance',limit:500,
-        });
+        };
+        const result = await searchResearch(db, url.searchParams.get('q')!,searchOptions);
         const unique = new Map<string, any>();
-        for (const hit of result.hits) if (hit.bookmarkId && !unique.has(hit.bookmarkId)) {
-          const bookmark:any = handleBookmarkById(db,hit.bookmarkId);
-          if (bookmark) { bookmark.researchMatch={excerpt:hit.excerpt,kind:hit.kind,matchedBy:hit.matchedBy,sourceId:hit.id};unique.set(hit.bookmarkId,bookmark); }
-        }
-        const offset=Math.max(0,Number(url.searchParams.get('offset'))||0),limit=Math.min(100,Number(url.searchParams.get('limit'))||50);
+        for (const hit of result.hits) if (hit.bookmarkId && !unique.has(hit.bookmarkId)) unique.set(hit.bookmarkId,hit);
+        const offset=Math.max(0,Number(url.searchParams.get('offset'))||0),limit=Math.max(1,Math.min(100,Number(url.searchParams.get('limit'))||50));
         let ids=[...unique.keys()];
         const sorted=url.searchParams.get('sort');
-        if(ids.length&&['asc','desc'].includes(sorted||'')) ids=(db.exec(`SELECT b.id FROM bookmarks b WHERE b.id IN (${ids.map(()=>'?').join(',')}) ${bookmarkSortClause(sorted==='asc'?'asc':'desc')}`,ids)[0]?.values||[]).map(row=>String(row[0]));
-        sendJson(res,{bookmarks:ids.slice(offset,offset+limit).map(id=>unique.get(id)),total:unique.size,search:{query:url.searchParams.get('q'),tokens:[],mode:'smart'},order:{mode:'relevance',direction:sorted==='asc'?'asc':'desc',positioned:0,unpositioned:0}});
+        if(['asc','desc'].includes(sorted||'')){
+          ids=[...new Set([...keywordBookmarkIds(db,url.searchParams.get('q')!,searchOptions),...ids])];
+          if(ids.length)ids=(db.exec(`SELECT b.id FROM bookmarks b WHERE b.id IN (SELECT value FROM json_each(?)) ${bookmarkSortClause(sorted==='asc'?'asc':'desc')}`,[JSON.stringify(ids)])[0]?.values||[]).map(row=>String(row[0]));
+        }
+        const bookmarks=ids.slice(offset,offset+limit).map(id=>{
+          const bookmark:any=handleBookmarkById(db,id),hit=unique.get(id);
+          if(bookmark&&hit)bookmark.researchMatch={excerpt:hit.excerpt,kind:hit.kind,matchedBy:hit.matchedBy,sourceId:hit.id};
+          return bookmark;
+        }).filter(Boolean);
+        sendJson(res,{bookmarks,total:ids.length,search:{query:url.searchParams.get('q'),tokens:buildSearchPlan(url.searchParams.get('q')!).tokens,mode:'smart'},order:{mode:'relevance',direction:sorted==='asc'?'asc':'desc',positioned:0,unpositioned:0}});
         return;
       }
       sendJson(res, handleBookmarks(db, url.searchParams));

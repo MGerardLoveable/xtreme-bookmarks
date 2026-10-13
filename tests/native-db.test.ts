@@ -5,8 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { openNativeDatabase } from '../src/native-db.js';
 import { openDb, saveDb, backupDb } from '../src/db.js';
+const nativeSupported=Number(process.versions.node.split('.')[0])>=22;
 
-test('native adapter preserves prepared statements, transactions, FTS, and persistence', () => {
+test('native adapter preserves prepared statements, transactions, FTS, and persistence', {skip:!nativeSupported}, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xb-native-'));
   const file = path.join(dir, 'bookmarks.db');
   let db = openNativeDatabase(file);
@@ -25,7 +26,7 @@ test('native adapter preserves prepared statements, transactions, FTS, and persi
   } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('native backup includes committed WAL data', async () => {
+test('native backup includes committed WAL data', {skip:!nativeSupported}, async () => {
   const previous = process.env.XB_DB_DRIVER;
   process.env.XB_DB_DRIVER = 'native';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xb-native-backup-'));

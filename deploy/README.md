@@ -2,7 +2,7 @@
 
 Run one application process with its own Unix account and data directory.
 Use Node.js 20 or later. Build with `npm ci && npm run release:check`.
-Use Node.js 22.13+ (24 recommended) and `XB_DB_DRIVER=native` for the file-backed
+Use Node.js 22.16+ (24 recommended) and `XB_DB_DRIVER=native` for the file-backed
 research database. Allow a one-time full-text indexing pass on first startup.
 Install the application under `/opt/xtreme-bookmarks`, owned by root; the
 service account should not be able to rewrite executable code.

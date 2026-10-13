@@ -98,6 +98,17 @@ export function keywordResearch(db: Database, query: string, options: ResearchSe
     .map((row,index) => ({ ...hitFromRow(row), score:1/(60+index+1), matchedBy:['text'],excerpt:excerptFor(String(row[5]),plan.tokens) }));
 }
 
+export function keywordBookmarkIds(db:Database,query:string,options:ResearchSearchOptions={}):string[] {
+  const plan=buildSearchPlan(query),terms=plan.tokens.filter(token=>!STOPWORDS.has(token));
+  const scope=researchScope({...options,author:options.author??plan.author,category:options.category??plan.category,domain:options.domain??plan.domain});
+  const find=(expression?:string)=>rows(db,`SELECT DISTINCT s.bookmark_id FROM research_sources s NOT INDEXED
+    ${expression?'JOIN research_fts f ON f.rowid=s.rowid':''}
+    WHERE ${expression?'research_fts MATCH ? AND ':''}${scope.sql} AND s.bookmark_id IS NOT NULL`,expression?[expression,...scope.params]:scope.params).map(row=>String(row[0]));
+  if(!terms.length)return plan.author||plan.category||plan.domain?find():[];
+  const escaped=terms.map(term=>`"${term.replace(/"/g,'""')}"${term.length>=3?'*':''}`);
+  const strict=find(escaped.join(' AND '));return strict.length?strict:find(escaped.join(' OR '));
+}
+
 function excerptFor(body: string, terms: string[]): string {
   const lower=body.toLowerCase(); const locations=terms.map((t)=>lower.indexOf(t)).filter((n)=>n>=0);
   const start=Math.max(0,(locations.length ? Math.min(...locations) : 0)-100);
@@ -136,7 +147,7 @@ export async function searchResearch(db: Database, query: string, options: Resea
       } catch(error){console.error('Semantic search unavailable:',(error as Error).message);}
     }
     hits=[...combined.values()].sort((a,b)=>b.score-a.score);
-    if(resolved.semantic!==false&&embedded>0&&plan.tokens.filter(token=>!STOPWORDS.has(token)).length>=4&&hits.length>1){
+    if(resolved.semantic!==false&&embedded>0&&!['asc','desc','oldest','newest'].includes(resolved.sort||'')&&plan.tokens.filter(token=>!STOPWORDS.has(token)).length>=4&&hits.length>1){
       try{hits=await rerankHits(plan.text||query,hits);}catch(error){console.error('Relevance reranking unavailable:',(error as Error).message);}
     }
     if(options.sort==='asc'||options.sort==='oldest')hits.sort((a,b)=>a.capturedAt.localeCompare(b.capturedAt));
