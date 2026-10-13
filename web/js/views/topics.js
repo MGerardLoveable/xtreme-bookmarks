@@ -78,7 +78,7 @@ export function TopicsView(root) {
       show('overview');
       await instances.overview.openWorkspace(id);
     },
-    onShow() { show(requestedPanel(), false); },
+    onShow() { const next=requestedPanel();if(active===next)instances[active]?.onShow?.();else show(next, false); },
     onHide() { instances[active]?.onHide?.(); },
     onRoute() { const next=requestedPanel();if(active===next)instances[active]?.onRoute?.();else show(next, false); },
     onKey(event) { instances[active]?.onKey?.(event); },
