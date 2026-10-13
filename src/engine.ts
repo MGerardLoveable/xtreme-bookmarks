@@ -252,6 +252,7 @@ function grokHeadlessArgs(promptPath: string): string[] {
     '--prompt-file', promptPath,
     '--max-turns', '1',
     '--no-subagents',
+    '--tools', '',
     '--disable-web-search',
     '--no-memory',
     '--no-plan',
@@ -265,7 +266,7 @@ function grokWslPromptScript(): string {
   return [
     'tmp=$(mktemp)',
     'cat > "$tmp"',
-    `grok --prompt-file "$tmp" --max-turns 1 --no-subagents --disable-web-search --no-memory --no-plan --verbatim --output-format plain --system-prompt-override '${GROK_RESEARCH_SYSTEM_PROMPT}'`,
+    `grok --prompt-file "$tmp" --max-turns 1 --no-subagents --tools '' --disable-web-search --no-memory --no-plan --verbatim --output-format plain --system-prompt-override '${GROK_RESEARCH_SYSTEM_PROMPT}'`,
     'code=$?',
     'rm -f "$tmp"',
     'exit $code',

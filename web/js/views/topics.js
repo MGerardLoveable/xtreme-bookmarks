@@ -2,8 +2,10 @@ import { BrainView } from './brain.js';
 import { GraphView } from './graph.js';
 import { InsightsView } from './insights.js';
 import { renderIcons } from '../icons.js';
+import { ResearchView } from './research.js';
 
 const PANELS = {
+  research: { label: 'Research', icon: 'search', factory: ResearchView },
   overview: { label: 'Overview', icon: 'brain-circuit', factory: BrainView },
   map: { label: 'Map', icon: 'network', factory: GraphView },
   signals: { label: 'Signals', icon: 'bar-chart-3', factory: InsightsView },
@@ -78,7 +80,7 @@ export function TopicsView(root) {
     },
     onShow() { show(requestedPanel(), false); },
     onHide() { instances[active]?.onHide?.(); },
-    onRoute() { show(requestedPanel(), false); },
+    onRoute() { const next=requestedPanel();if(active===next)instances[active]?.onRoute?.();else show(next, false); },
     onKey(event) { instances[active]?.onKey?.(event); },
   };
 }

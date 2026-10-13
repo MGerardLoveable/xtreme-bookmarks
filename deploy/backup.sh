@@ -15,8 +15,11 @@ if systemctl is-active --quiet xtreme-bookmarks; then
   systemctl stop xtreme-bookmarks
 fi
 name="backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+paths=(data)
+if [ -d /var/lib/xtreme-bookmarks/.grok ]; then paths+=(.grok); fi
 tar -czf "$destination/$name.partial" --exclude=data/backups \
-  -C /var/lib/xtreme-bookmarks data \
+  --exclude=data/models --exclude=.grok/logs --exclude=.grok/memtrace --exclude=.grok/sessions \
+  -C /var/lib/xtreme-bookmarks "${paths[@]}" \
   -C /etc xtreme-bookmarks
 tar -tzf "$destination/$name.partial" >/dev/null
 mv "$destination/$name.partial" "$destination/$name"

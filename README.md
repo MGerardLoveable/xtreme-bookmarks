@@ -77,11 +77,39 @@ The web app is organized around using saved information, not merely storing it:
 - **Brain Cycle** distills source text into a summary, key claim, why it matters, a suggested next action, entities, freshness, and conservative contradiction candidates. Today items and opened items can be distilled on demand, while incremental background passes catch up the archive.
 - **Workspaces** turn bookmarks into project evidence, decisions, tasks, inspiration, or references. Projects, open questions, dossiers, and durable topics can each carry a focus question.
 - **Ask** can search the entire archive or one workspace, keeps a bounded conversation, and shows canonical evidence behind the answer.
-- **Make** turns an answer and its evidence into a reusable brief, checklist, decision memo, experiment, context pack, or flashcards without another model call.
+- **Make** turns an answer and its evidence into reusable outputs. Action plans and experiments use the connected model to create executable steps, prerequisites, and completion criteria, then persist progress and observed results.
 - **Author dossiers** show a person's saved history, recurring territory, claims, timeline, notes, and explicit workspace contributions.
 - **Radar** watches selected X accounts and exposes Brain Cycle coverage, stale claims, and possible tensions alongside incoming signals.
 
 Personal annotations, original source text, and generated synthesis remain separate in context packs so an agent or collaborator can tell where every statement came from.
+
+### Research workbench
+
+Open **Topics > Research** for the unified research workflow:
+
+- **Search** combines exact text with local semantic recall and cross-encoder reranking. Posts, quoted text, image descriptions, personal notes, highlights, extracted content, and experiment outcomes remain separately attributed. Workspace, content-type, date, and chronological filters constrain retrieval.
+- **Briefs** keep versioned workspace recommendations, alternatives, uncertainty, changes, and next steps alongside their evidence. Source edits, exclusions, reviewed claims, and experiment results invalidate cached briefs.
+- **Plans** store dependent steps, success criteria, progress, and observed outcomes. Recorded results become searchable personal experience.
+- **Connections** propose bounded tests connecting techniques across workspaces. Dismissed or already-tried suggestions are suppressed.
+- **Evidence** tracks exact source passages, conditions, and unverified/supported/disputed/superseded/withdrawn status with revision history.
+- **Imports** records new versus scanned/existing items, pages, stopping reasons, and extraction errors. Recent-source extraction jobs are resumable and retryable.
+- **Agents** creates revocable MCP bearer tokens restricted to selected workspaces. Read-only is the default; optional write access permits proposals and experiment results, not arbitrary archive administration.
+
+GitHub gap research returns candidate repositories for review and can add an accepted repository to a workspace. X research opens a query link; it does not silently import or independently verify external posts.
+
+### Local extraction and performance
+
+For the file-backed database on Node.js 22.13+ (Node.js 24 recommended), set `XB_DB_DRIVER=native`. SQLite WAL persists individual page writes; backups use a consistent SQLite snapshot. Node.js 20 retains the existing WASM database path.
+
+The first server launch builds a unified full-text index. Local CPU models are downloaded from Hugging Face and cached under `data/models`; no embedding API key is needed. Semantic indexing catches up incrementally, prioritizing workspace and recent material. Exact text search remains available while indexing runs. Set `XB_SEMANTIC_SEARCH=0` to disable background embeddings; the Library's Text mode bypasses semantic retrieval.
+
+Optional `tesseract`, `ffmpeg`, and `pdftotext` executables enable OCR, transcription, and PDF extraction. Articles use Readability. Video processing is currently limited to direct video files up to 32 MB and the first two minutes; the source inspector displays this coverage. Thread extraction includes saved conversation posts only, not unsaved replies. Unsupported, blocked, and oversized sources are shown as failed/retryable jobs rather than described as fully indexed.
+
+Detailed recommendations use the configured synthesis provider. To reconnect an existing Grok subscription on a headless server, run `grok login --device-auth` as the application service user. Without a connected provider, briefs display an evidence overview and plans use a clearly labelled guided pilot. Research synthesis cannot execute tools or delegate work.
+
+The MCP endpoint is `POST /mcp` (JSON-RPC, protocol `2025-03-26`). Owner Basic authentication or an Agent bearer token is required. Tools: `search`, `fetch_source`, `workspace_brief`, `propose_update`, and `record_experiment`. Reverse proxies must forward bearer authorization on this path to the app while preserving normal owner authentication on every other path.
+
+Verification: `npm run build`, `node --import tsx --test tests/*.test.ts`, and `node scripts/verify-research.mjs --semantic --browser` (requires Playwright with Chrome, or `XB_PLAYWRIGHT_MODULE` pointing to an installed Playwright module). The last command uses synthetic private fixtures, checks recall, task persistence, scoped agent denial/revocation, and desktop/tablet/mobile layouts. Set `XB_RESEARCH_SYNTHESIS=0` for offline guided-plan verification.
 
 ## Commands
 

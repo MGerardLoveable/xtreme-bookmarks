@@ -2,6 +2,8 @@
 
 Run one application process with its own Unix account and data directory.
 Use Node.js 20 or later. Build with `npm ci && npm run release:check`.
+Use Node.js 22.13+ (24 recommended) and `XB_DB_DRIVER=native` for the file-backed
+research database. Allow a one-time full-text indexing pass on first startup.
 Install the application under `/opt/xtreme-bookmarks`, owned by root; the
 service account should not be able to rewrite executable code.
 
@@ -29,6 +31,11 @@ health checks. For Apache, use `ProxyPreserveHost Off`: the application validate
 loopback Host headers. Set the one public origin explicitly as above. Forward
 Authorization to the app and use matching credentials at both layers. Disable
 proxying of the ACME challenge path. Never expose port 3848 publicly.
+For scoped MCP tokens, override proxy Basic authentication only on the exact
+`/mcp` path, forwarding it to application authentication instead. All other
+paths retain the owner login. Test that unauthenticated MCP calls still return
+401, a scoped token cannot fetch another workspace's source, and revocation
+takes effect immediately. Do not expose the research administration API to tokens.
 Install `renew-certificate.sh` under `/etc/letsencrypt/renewal-hooks/deploy/`
 with mode 755 so Apache loads the renewed certificate after Certbot succeeds.
 

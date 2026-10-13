@@ -203,6 +203,9 @@ export interface SyncResult {
   statePath: string;
   /** True when fetched records were saved but the remote scan ended with an error. */
   incomplete?: boolean;
+  scanned?: number;
+  existingSeen?: number;
+  lastCursor?: string;
 }
 
 function parseSnowflake(value?: string | null): bigint | null {
@@ -1070,6 +1073,9 @@ export async function syncBookmarksGraphQL(
     cachePath,
     statePath,
     incomplete: !complete || undefined,
+    scanned: allSeenIds.length,
+    existingSeen: Math.max(0,allSeenIds.length-totalAdded),
+    lastCursor: savedCursor,
   };
 }
 

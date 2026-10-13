@@ -166,6 +166,7 @@ export function LibraryView(root) {
             <button class="segment-btn" data-mode="triage">Triage</button>
             <button class="segment-btn" data-mode="gallery">Gallery</button>
           </div>
+          <select class="input library-search-kind" id="lib-search-kind" aria-label="Search method"><option value="smart">Smart</option><option value="exact">Text</option></select>
           <button class="btn btn-ghost btn-sm" id="lib-presentation" title="Switch between refined and classic Library">
             <span data-icon="layers"></span><span id="lib-presentation-label">Classic</span>
           </button>
@@ -460,6 +461,7 @@ export function LibraryView(root) {
     try {
       const params = {
         q: state.filters.q || undefined,
+        searchMode: $('#lib-search-kind', root).value,
         author: state.filters.author || undefined,
         category: state.filters.category || undefined,
         domain: state.filters.domain || undefined,
@@ -495,6 +497,7 @@ export function LibraryView(root) {
     const isSearching = Boolean(state.filters.q);
     const usesXOrder = state.order?.mode === 'x';
     const unknownOrder = Number(state.order?.unpositioned || 0);
+    const orderLabel = isSearching && state.sort !== 'relevance' ? (state.sort === 'asc' ? 'Oldest saved' : 'Newest saved') : usesXOrder ? (state.sort === 'desc' ? 'X order' : 'Oldest saved') : 'Best match';
     els.sort.hidden = isSearching;
     els.searchSort.hidden = !isSearching;
     els.searchSort.value = isSearching ? state.sort : 'relevance';
@@ -503,7 +506,7 @@ export function LibraryView(root) {
     els.sort.title = 'Show bookmarks in the same saved order as X';
     els.summary.innerHTML = `
       <span><strong style="color:var(--fg)">${fmtNumber(shown)}</strong> of ${fmtNumber(total)} results</span>
-      <span class="summary-context" title="${usesXOrder ? 'Matches the saved bookmark order shown by X' : 'Search results are ordered by relevance'}"><span data-icon="${usesXOrder ? 'bookmark' : 'sparkles'}"></span>${usesXOrder ? (state.sort === 'desc' ? 'X order' : 'Oldest saved') : 'Best match'}</span>
+      <span class="summary-context" title="${escape(orderLabel)}"><span data-icon="${usesXOrder ? 'bookmark' : 'sparkles'}"></span>${orderLabel}</span>
       ${unknownOrder ? `<span class="summary-context" title="These legacy records were captured before X order positions were stored and appear after positioned bookmarks"><span data-icon="circle-help"></span>${fmtNumber(unknownOrder)} position${unknownOrder === 1 ? '' : 's'} unknown</span>` : ''}
       ${activeFilter ? `<span class="summary-context">${escape(String(activeFilter))}</span>` : ''}
       ${state.search?.correction ? `<button class="search-correction" id="lib-search-correction">Showing results for <strong>${escape(state.search.correction)}</strong><span>Clear</span></button>` : ''}
@@ -613,6 +616,7 @@ export function LibraryView(root) {
           ${b.mediaCount ? `<span>·</span><span>${b.mediaCount} media</span>` : ''}
         </div>
         <div class="bookmark-text">${highlightSearchText(b.text || '', searchTokens)}</div>
+        ${b.researchMatch && b.researchMatch.kind !== 'bookmark' ? `<div class="research-match"><a href="#/topics/research?source=${encodeURIComponent(b.researchMatch.sourceId)}">${escape(b.researchMatch.kind)}</a> ${escape(b.researchMatch.excerpt)}</div>` : ''}
         ${quotedContext}
         ${matchLabel}
         ${tags ? `<div class="bookmark-tags">${tags}</div>` : ''}
@@ -1324,6 +1328,7 @@ export function LibraryView(root) {
     state.offset = 0;
     load();
   });
+  $('#lib-search-kind', root).addEventListener('change', () => { state.offset = 0; load(); });
   els.searchSort.addEventListener('change', () => {
     state.sort = els.searchSort.value;
     state.offset = 0;

@@ -17,6 +17,9 @@ import {
   mdDomainsDir, mdEntitiesDir, mdDir,
 } from './paths.js';
 import { searchBookmarks } from './bookmarks-db.js';
+import { openDb } from './db.js';
+import { twitterBookmarksIndexPath } from './paths.js';
+import { hasTable } from './research-store.js';
 import { resolveEngine, invokeEngineAsync } from './engine.js';
 import { buildAskPrompt, type MdBookmark } from './md-prompts.js';
 import { slug, logEntry } from './md.js';
@@ -256,14 +259,18 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   const progress = options.onProgress ?? ((s: string) => fs.writeSync(2, s + '\n'));
   throwIfCancelled(options.signal);
 
+  const contextDb=await openDb(twitterBookmarksIndexPath());
+  let unified=false;
+  try { unified=hasTable(contextDb,'research_sources'); } finally { contextDb.close(); }
+
   // ── L1: index ───────────────────────────────────────────────────────────
   const workspaceScoped = Boolean(options.topicId);
   progress(workspaceScoped ? 'Using workspace scope...' : 'Reading index...');
   let indexContent = '';
   const indexPath = mdIndexPath();
-  if (!workspaceScoped && await pathExists(indexPath)) {
+  if (!workspaceScoped && !unified && await pathExists(indexPath)) {
     indexContent = await readMd(indexPath);
-  } else if (!workspaceScoped) {
+  } else if (!workspaceScoped && !unified) {
     progress('  Warning: index not found. Run xb md first.');
   }
 
@@ -272,7 +279,7 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   const pagesRead: string[] = [];
   let mdContext = indexContent ? `### Index\n${indexContent}\n\n` : '';
 
-  if (!workspaceScoped && await pathExists(mdDir())) {
+  if (!workspaceScoped && !unified && await pathExists(mdDir())) {
     const relevantPaths = await selectRelevantPages(question);
     for (const absPath of relevantPaths) {
       try {
@@ -301,7 +308,7 @@ export async function askMd(question: string, options: AskOptions = {}): Promise
   // ── L3: raw FTS5 bookmark results ───────────────────────────────────────
   progress('Searching bookmarks...');
   const ftsQuery = toFtsQuery(question);
-  const rawResults = ftsQuery && !workspaceScoped
+  const rawResults = ftsQuery && !workspaceScoped && !unified
     ? await searchBookmarks({ query: ftsQuery, limit: MAX_RAW_BOOKMARKS })
     : [];
   const rawBookmarks: MdBookmark[] = rawResults.map((r) => ({

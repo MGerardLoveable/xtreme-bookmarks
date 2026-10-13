@@ -261,6 +261,7 @@ test('Grok CLI uses a bounded research-only invocation', async () => {
 
   assert.deepEqual(args.slice(0, 2), ['--prompt-file', '/tmp/question.txt']);
   assert.ok(args.includes('--no-subagents'));
+  assert.equal(args[args.indexOf('--tools') + 1], '');
   assert.ok(args.includes('--disable-web-search'));
   assert.ok(args.includes('--no-memory'));
   assert.ok(args.includes('--no-plan'));

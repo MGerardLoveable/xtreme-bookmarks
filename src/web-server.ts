@@ -1,4 +1,9 @@
 import http from 'node:http';
+import { initResearchStore, importStart, importFinish } from './research-store.js';
+import { handleResearchApi, mcpAgentGrant } from './research-api.js';
+import { embedPendingSources, searchResearch } from './research-search.js';
+import { enqueueEnrichment, processEnrichment, indexWikiSources } from './research-enrichment.js';
+import { createPlan, planMarkdown } from './research-intelligence.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +41,7 @@ import {
   listKnowledgeTopicsFromDb,
   requireActiveKnowledgeTopicFromDb,
   retrieveKnowledgeEvidenceFromDb,
+  saveSynthesisFromDb,
 } from './knowledge-service.js';
 import {
   activationSchemaPending,
@@ -623,6 +629,7 @@ async function rebuildIndexAndReload(
   } finally {
     if (state) {
       state.db = await openDb(dbPath);
+      initResearchStore(state.db);
       state.dbReloading = false;
     }
   }
@@ -635,6 +642,13 @@ async function reloadStateDb(dbPath: string, state?: { db: Database }): Promise<
   ensureMigrations(state.db);
   initBrainSchema(state.db);
   initXStreamSchema(state.db);
+  initResearchStore(state.db);
+}
+
+async function refreshResearchMembership(db:Database):Promise<void> {
+  for (const space of listBrainSpacesFromDb(db).filter(space=>space.status==='active').slice(0,20)) {
+    try { await seedBrainSpace(space.id); } catch(error) { console.error('Workspace refresh:', (error as Error).message); }
+  }
 }
 
 function xBrowserPollOptions(
@@ -1411,6 +1425,7 @@ async function handleApi(
   state?: WebRuntimeState,
 ): Promise<void> {
   try {
+    if (await handleResearchApi(db, dbPath, req, res, url)) return;
     if (req.method === 'GET' && pathname === '/api/system/status') {
       const integrity = databaseIntegrity(db);
       sendJson(res, {
@@ -1541,16 +1556,24 @@ async function handleApi(
         return;
       }
       try {
-        const result = await makeKnowledgeArtifactWithEngineFromDb(db, {
+        const input = {
           type: body.type,
           query: body.query || '',
           title: body.title,
           topicId: topic.topicId,
           limit: body.limit,
           synthesis: body.synthesis,
-        }, {
-          signal: makeController.signal,
-        });
+        };
+        let result;
+        if (body.type === 'checklist' || body.type === 'experiment') {
+          const plan = await createPlan(db, { goal: input.query, title: input.title, spaceId: topic.topicId, synthesis: input.synthesis });
+          const markdown = planMarkdown(plan);
+          const contextPack = buildContextPackFromDb(db,input);
+          const savedArtifact = saveSynthesisFromDb(db,{question:plan.title,answer:markdown,topicId:topic.topicId,evidence:contextPack.evidence});
+          result = {type:body.type,title:plan.title,markdown,engine:plan.mode,evidence:contextPack.evidence,savedArtifact,contextPack,plan};
+        } else {
+          result = await makeKnowledgeArtifactWithEngineFromDb(db,input,{signal:makeController.signal});
+        }
         for (const evidence of result.evidence) {
           const exists = db.exec('SELECT 1 FROM bookmarks WHERE id = ? LIMIT 1', [evidence.itemId]);
           if (exists[0]?.values.length) {
@@ -1604,6 +1627,25 @@ async function handleApi(
     }
 
         if (req.method === 'GET' && pathname === '/api/bookmarks') {
+      if (url.searchParams.get('q') && url.searchParams.get('searchMode') === 'smart') {
+        const result = await searchResearch(db, url.searchParams.get('q')!, {
+          author: url.searchParams.get('author') || undefined,category:url.searchParams.get('category')||undefined,
+          domain:url.searchParams.get('domain')||undefined,collection:url.searchParams.get('collection')||undefined,
+          readStatus:url.searchParams.get('readStatus')||undefined,after:url.searchParams.get('capturedAfter')||undefined,
+          sort:url.searchParams.get('sort')||'relevance',limit:500,
+        });
+        const unique = new Map<string, any>();
+        for (const hit of result.hits) if (hit.bookmarkId && !unique.has(hit.bookmarkId)) {
+          const bookmark:any = handleBookmarkById(db,hit.bookmarkId);
+          if (bookmark) { bookmark.researchMatch={excerpt:hit.excerpt,kind:hit.kind,matchedBy:hit.matchedBy,sourceId:hit.id};unique.set(hit.bookmarkId,bookmark); }
+        }
+        const offset=Math.max(0,Number(url.searchParams.get('offset'))||0),limit=Math.min(100,Number(url.searchParams.get('limit'))||50);
+        let ids=[...unique.keys()];
+        const sorted=url.searchParams.get('sort');
+        if(ids.length&&['asc','desc'].includes(sorted||'')) ids=(db.exec(`SELECT b.id FROM bookmarks b WHERE b.id IN (${ids.map(()=>'?').join(',')}) ${bookmarkSortClause(sorted==='asc'?'asc':'desc')}`,ids)[0]?.values||[]).map(row=>String(row[0]));
+        sendJson(res,{bookmarks:ids.slice(offset,offset+limit).map(id=>unique.get(id)),total:unique.size,search:{query:url.searchParams.get('q'),tokens:[],mode:'smart'},order:{mode:'relevance',direction:sorted==='asc'?'asc':'desc',positioned:0,unpositioned:0}});
+        return;
+      }
       sendJson(res, handleBookmarks(db, url.searchParams));
       return;
     }
@@ -2227,6 +2269,8 @@ async function handleApi(
       }
 
       const grabMode = url.searchParams.get('mode') === 'backfill' ? 'backfill' : 'quick';
+      const importId = importStart(db, grabMode);
+      saveDb(db, dbPath);
       send('status', { stage: 'syncing', message: grabMode === 'backfill' ? 'Continuing bookmark backfill from X...' : 'Grabbing latest bookmarks from X...' });
       try {
         let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
@@ -2257,6 +2301,8 @@ async function handleApi(
             send('progress', { added: apiResult.added, newAdded: apiResult.added, totalFetched: apiResult.totalBookmarks, running: false, done: true, stopReason: 'oauth api fallback' });
             send('status', { stage: apiResult.added > 0 ? 'indexing' : 'complete', message: apiResult.added > 0 ? 'Indexing...' : 'Done.' });
             if (apiResult.added > 0) await rebuildIndexAndReload(dbPath, state, true);
+            importFinish(state?.db || db, importId, { ...apiResult, provider: 'x-api', stopReason: 'oauth api fallback' });
+            saveDb(state?.db || db, dbPath);
             send('done', { ...apiResult, provider: 'x-api', stopReason: 'oauth api fallback' });
             if (state) {
               state.lastGrabSucceededAt = new Date().toISOString();
@@ -2297,6 +2343,10 @@ async function handleApi(
           await rebuildIndexAndReload(dbPath, state, syncResult.bookmarkedAtRepaired === 0);
         }
         send('done', syncResult);
+        importFinish(state?.db || db, importId, { ...syncResult, scanned: state?.lastGrabProgress?.totalFetched ?? null });
+        enqueueEnrichment(state?.db || db, undefined, 100);
+        if (syncResult.added > 0 || syncResult.changed > 0) await refreshResearchMembership(state?.db || db);
+        saveDb(state?.db || db, dbPath);
         if (state) {
           state.preferredBrowserId = successfulBrowserId;
           if (syncResult.incomplete) {
@@ -2307,6 +2357,8 @@ async function handleApi(
           }
         }
       } catch (err) {
+        importFinish(state?.db || db, importId, undefined, (err as Error).message);
+        saveDb(state?.db || db, dbPath);
         if (state) state.lastGrabError = (err as Error).message;
         send('error', { message: (err as Error).message, authUrl: (err as Error & { authUrl?: string }).authUrl });
       }
@@ -3183,6 +3235,8 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
   if (state.grabRunning) return;
   state.grabRunning = true;
   state.grabStartedAt = new Date().toISOString();
+  const importId = importStart(state.db, 'automatic');
+  saveDb(state.db, dbPath);
   try {
     let syncResult: Awaited<ReturnType<typeof syncBookmarksGraphQL>> | undefined;
     let lastBrowserError: unknown;
@@ -3219,7 +3273,13 @@ async function autoGrab(state: WebRuntimeState, dbPath: string): Promise<void> {
       state.lastGrabSucceededAt = new Date().toISOString();
       state.lastGrabError = undefined;
     }
+    importFinish(state.db, importId, syncResult);
+    enqueueEnrichment(state.db, undefined, 100);
+    if (syncResult.added > 0 || syncResult.changed > 0) await refreshResearchMembership(state.db);
+    saveDb(state.db, dbPath);
   } catch (err) {
+    importFinish(state.db, importId, undefined, (err as Error).message);
+    saveDb(state.db, dbPath);
     state.lastGrabError = (err as Error).message;
     console.error(`  [${ts}] Auto-grab failed:`, state.lastGrabError);
   }
@@ -3313,6 +3373,10 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   state.db.run(`CREATE TABLE IF NOT EXISTS bookmark_highlights (id INTEGER PRIMARY KEY AUTOINCREMENT, bookmark_id TEXT NOT NULL, text_fragment TEXT NOT NULL, color TEXT NOT NULL DEFAULT 'yellow', created_at TEXT NOT NULL)`);
   state.db.run(`CREATE TABLE IF NOT EXISTS dead_links (bookmark_id TEXT PRIMARY KEY, status INTEGER, checked_at TEXT NOT NULL)`);
   state.db.run(`CREATE TABLE IF NOT EXISTS x_webhook_events (id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, payload_json TEXT NOT NULL, signature TEXT, received_at TEXT NOT NULL)`);
+  initResearchStore(state.db);
+  state.db.run("UPDATE research_jobs SET status='pending',available_at=CURRENT_TIMESTAMP WHERE status='running'");
+  state.db.run("UPDATE research_imports SET status='interrupted',finished_at=CURRENT_TIMESTAMP WHERE status='running'");
+  enqueueEnrichment(state.db,undefined,100);
   saveDb(state.db, dbPath);
 
   autoUpdateXWatchlist(state, dbPath).catch((err) => {
@@ -3378,18 +3442,24 @@ export async function startWebServer(port: number = 3848): Promise<void> {
       return;
     }
 
-    if (!isRequestAuthorized(req, auth)) {
+    if (!isRequestAuthorized(req, auth) && !(pathname === '/mcp' && mcpAgentGrant(state.db,req))) {
       requestWebAuth(res);
       return;
     }
 
     try {
+      if (pathname === '/mcp') {
+        const requestDb=await openDb(dbPath);
+        try { await handleResearchApi(requestDb,dbPath,req,res,url); } finally { requestDb.close(); }
+        return;
+      }
       if (pathname.startsWith('/api/')) {
         if (state.dbReloading) {
           sendError(res, 'Bookmark index is refreshing. Try again in a moment.', 503);
           return;
         }
-        await handleApi(state.db, dbPath, req, res, url, pathname, state);
+        const requestDb=await openDb(dbPath);
+        try { await handleApi(requestDb, dbPath, req, res, url, pathname, state); } finally { requestDb.close(); }
         return;
       }
 
@@ -3429,6 +3499,22 @@ export async function startWebServer(port: number = 3848): Promise<void> {
   });
 
   const grabInterval = setInterval(() => { autoGrab(state, dbPath); }, 30 * 60 * 1000);
+  let researchRunning = false;
+  const researchInterval = setInterval(async () => {
+    if (researchRunning || state.dbReloading || state.grabRunning || shuttingDown) return;
+    researchRunning = true;
+    const researchDb=await openDb(dbPath);
+    try {
+      const storage=fs.statfsSync(path.dirname(dbPath));
+      if(storage.bavail*storage.bsize>512*1024*1024){
+        await indexWikiSources(researchDb,8);
+        await processEnrichment(researchDb, 1);
+        if (process.env.XB_SEMANTIC_SEARCH !== '0') await embedPendingSources(researchDb, 16);
+      }
+      saveDb(researchDb,dbPath);
+    } catch (error) { console.error('Research enrichment:', (error as Error).message); }
+    finally { researchDb.close();researchRunning = false; }
+  }, 5000);
   const xFeedInterval: ReturnType<typeof setInterval> | null = null;
   const brainInterval = setInterval(() => {
     runDueBrainAgents().catch((err) => console.error('  Brain agent watch failed:', (err as Error).message));
@@ -3443,6 +3529,7 @@ export async function startWebServer(port: number = 3848): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     clearInterval(grabInterval);
+    clearInterval(researchInterval);
     if (xFeedInterval) clearInterval(xFeedInterval);
     clearInterval(brainInterval);
     clearInterval(activationInterval);

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { nativeConnection, openNativeDatabase } from './native-db.js';
 
 const require = createRequire(import.meta.url);
 
@@ -27,6 +28,7 @@ const pendingDatabaseOpens = new Map<string, Promise<SharedDatabaseEntry>>();
 const databaseLeases = new WeakMap<object, SharedDatabaseEntry>();
 const BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_BACKUP_LIMIT = 12;
+export function databaseCacheKey(db: Database): object { return databaseLeases.get(db as object)?.database ?? db; }
 
 const WASM_PAGE_BYTES = 64 * 1024;
 const DEFAULT_SQL_WASM_INITIAL_MB = 256;
@@ -89,6 +91,14 @@ export async function openDb(filePath: string): Promise<Database> {
 }
 
 async function createSharedDatabase(resolvedPath: string): Promise<SharedDatabaseEntry> {
+  if (process.env.XB_DB_DRIVER === 'native') {
+    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true, mode: 0o700 });
+    const database = openNativeDatabase(resolvedPath);
+    fs.chmodSync(resolvedPath, 0o600);
+    const entry = { database, filePath: resolvedPath, leases: 0, mtimeMs: fileMtimeMs(resolvedPath) };
+    sharedDatabases.set(resolvedPath, entry);
+    return entry;
+  }
   const SQL = await getSql();
   const database = fs.existsSync(resolvedPath)
     ? new SQL.Database(fs.readFileSync(resolvedPath))
@@ -114,6 +124,11 @@ export function saveDb(db: Database, filePath: string): void {
   const resolvedPath = path.resolve(filePath);
   const entry = databaseLeases.get(db as object);
   const source = entry?.database ?? db;
+  if (nativeConnection(source)) {
+    maybeCreateScheduledBackup(resolvedPath);
+    fs.chmodSync(resolvedPath, 0o600);
+    return;
+  }
   const dir = path.dirname(resolvedPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (entry && entry.filePath === resolvedPath) {
@@ -155,7 +170,10 @@ export function backupDb(filePath: string, reason = 'manual'): DatabaseBackup | 
   const safeReason = reason.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'backup';
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const destination = path.join(backupDir, `${path.basename(resolvedPath)}.${timestamp}.${safeReason}.bak`);
-  fs.copyFileSync(resolvedPath, destination, fs.constants.COPYFILE_EXCL);
+  const live = sharedDatabases.get(resolvedPath)?.database;
+  const native = live && nativeConnection(live);
+  if (native) native.exec(`VACUUM INTO '${destination.replace(/'/g, "''")}'`);
+  else fs.copyFileSync(resolvedPath, destination, fs.constants.COPYFILE_EXCL);
   fs.chmodSync(destination, 0o600);
   pruneDbBackups(resolvedPath);
   return backupMetadata(destination);

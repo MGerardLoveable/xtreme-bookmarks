@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { researchEvidence, searchResearch, hitsAsEvidence } from './research-search.js';
 import path from 'node:path';
 import type { Database } from 'sql.js';
 import { buildSearchPlan } from './search.js';
@@ -121,6 +122,7 @@ export function listKnowledgeAnnotationsFromDb(db: Database, itemId?: string): K
 
 export function retrieveKnowledgeEvidenceFromDb(db: Database, query: string, options: RetrieveKnowledgeOptions = {}): KnowledgeEvidence[] {
   initBrainSchema(db);
+  if (tableExists(db, 'research_sources')) return researchEvidence(db, query, options);
   const limit = Math.max(1, Math.min(options.limit ?? 30, 100));
   const terms = termsForQuery(query);
   if (terms.length === 0) return [];
@@ -262,6 +264,10 @@ async function conceptEvidence(query: string, limit: number): Promise<KnowledgeE
 export async function retrieveKnowledgeEvidence(query: string, options: RetrieveKnowledgeOptions = {}): Promise<KnowledgeEvidence[]> {
   const db = await openDb(twitterBookmarksIndexPath());
   try {
+    if (tableExists(db, 'research_sources')) {
+      const result = await searchResearch(db, query, { topicId: options.topicId, limit: options.limit ?? 30 });
+      return hitsAsEvidence(result.hits,db);
+    }
     const dbEvidence = retrieveKnowledgeEvidenceFromDb(db, query, options);
     const concepts = options.includeConcepts === false || options.topicId
       ? []

@@ -226,6 +226,12 @@ export function HomeView(root) {
         <span id="home-import-message" role="status">Your latest saves are in the Library.</span>
         <button class="btn btn-sm" type="button" data-latest-saves><span data-icon="bookmark"></span>Latest saves</button>
       </div>
+      <div class="home-import-status" id="home-research-status">
+        <span id="home-research-message">Research tools</span>
+        <a class="btn btn-sm" href="#/topics/research"><span data-icon="search"></span>Research</a>
+        <a class="btn btn-sm" href="#/topics/research?mode=actions"><span data-icon="check-circle"></span>Plans</a>
+        <a class="btn btn-sm" href="#/topics/research?mode=imports"><span data-icon="download-cloud"></span>Import history</a>
+      </div>
 
       <section class="home-ask-band" aria-labelledby="home-ask-title">
         <div>
@@ -362,6 +368,9 @@ export function HomeView(root) {
       const data = await api.home();
       if (version !== state.loadVersion) return;
       state.data = data;
+      api.research('status').then(status => {
+        root.querySelector('#home-research-message').textContent = `${fmtNumber(status.sources)} searchable sources · ${fmtNumber(status.embedded)} indexed by meaning · ${fmtNumber(status.enrichment.counts.pending || 0)} extractions pending`;
+      }).catch(() => {});
       state.practiceIndex = 0;
       state.practiceResults = [];
       render();

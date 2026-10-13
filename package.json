@@ -50,8 +50,11 @@
     "cli"
   ],
   "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "@mozilla/readability": "0.6.0",
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
+    "linkedom": "0.18.12",
     "sql.js": "^1.14.1",
     "sql.js-fts5": "^1.4.0"
   },

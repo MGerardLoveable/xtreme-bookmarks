@@ -254,6 +254,7 @@ export function AskView(root) {
           markdown: result.markdown,
           type: result.type,
           engine: result.engine,
+          planId: result.plan?.id,
         };
         const historyTurn = history.find((item) => item === turn || (turn.ts && item.ts === turn.ts));
         if (historyTurn && historyTurn !== turn) historyTurn.madeArtifact = turn.madeArtifact;
@@ -375,6 +376,7 @@ export function AskView(root) {
           <button class="btn btn-sm btn-ghost ask-made-copy" data-i="${idx}"><span data-icon="copy"></span>Copy</button>
         </div>
         <div class="ask-made-document">
+          ${turn.madeArtifact.planId ? '<a class="btn btn-sm" href="#/topics/research?mode=actions"><span data-icon="check-circle"></span>Track progress and results</a>' : ''}
           ${renderAskDocument(turn.madeArtifact.markdown, {
             prefix: `made-${idx}`,
             fallbackTitle: turn.madeArtifact.title,

@@ -17,6 +17,11 @@ async function req(path, opts = {}) {
 }
 
 export const api = {
+  research(path, options = {}) {
+    return req(`/api/research/${path}`, options.body === undefined ? options : {
+      ...options, method: options.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options.body),
+    });
+  },
   // Home
   home(options = {}) { return req('/api/home', { signal: options.signal }); },
   homeRecallAction(queueId, action, snoozedUntil = null, response = '') {
