@@ -72,8 +72,9 @@ export function enqueueEnrichment(db:Database, bookmarkId?:string, limit=100):nu
     for(const item of media){
       if(typeof item==='string'){add(id,'ocr',item,priority);continue;}
       if(['video','animated_gif'].includes(item.type)){
-        const variants=(item.videoVariants||item.variants||[]).filter((v:any)=>v.contentType==='video/mp4').sort((a:any,b:any)=>(a.bitrate||0)-(b.bitrate||0));
+        const variants=(item.videoVariants||item.variants||[]).filter((v:any)=>v.contentType==='video/mp4'||v.content_type==='video/mp4'||(!v.contentType&&!v.content_type&&/\.mp4(?:[?#]|$)/i.test(v.url||''))).sort((a:any,b:any)=>(a.bitrate||0)-(b.bitrate||0));
         if(variants[0]?.url)add(id,'transcript',variants[0].url,priority);
+        if(item.url||item.mediaUrl)add(id,'ocr',item.url||item.mediaUrl,priority);
       }else if(item.url||item.mediaUrl)add(id,'ocr',item.url||item.mediaUrl,priority);
     }
     let links:string[]=[];try{links=JSON.parse(linksJson||'[]');}catch{}

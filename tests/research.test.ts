@@ -4,7 +4,7 @@ import { openNativeDatabase } from '../src/native-db.js';
 import { initBrainSchema } from '../src/brain.js';
 import { initResearchStore, rows, putExtractedSource, importStart, importFinish, researchRevision } from '../src/research-store.js';
 import { keywordResearch, searchResearch, EMBEDDING_MODEL } from '../src/research-search.js';
-import { liveBrief, listPlans, updatePlan, saveClaim } from '../src/research-intelligence.js';
+import { liveBrief, listPlans, updatePlan, saveClaim, boundedResearchEvidence } from '../src/research-intelligence.js';
 import { publicAddress, extractArticle, enqueueEnrichment } from '../src/research-enrichment.js';
 import { mcpAgentGrant } from '../src/research-api.js';
 import { hashText } from '../src/research-store.js';
@@ -112,5 +112,28 @@ test('agent tokens are hashed, scoped, and immediately revocable', () => {
     assert.deepEqual(mcpAgentGrant(db,req),{id:'agent',spaces:['robots'],canWrite:false});
     assert.equal(mcpAgentGrant(db,{headers:{authorization:'Bearer wrong-token'}} as IncomingMessage),null);
     db.run("DELETE FROM research_agents WHERE id='agent'");assert.equal(mcpAgentGrant(db,req),null);
+  }finally{db.close();}
+});
+
+test('large model contexts stay valid JSON within the evidence budget', () => {
+  const packed=boundedResearchEvidence({sources:Array.from({length:80},(_,index)=>({id:`source:${index}`,body:'Long source evidence. '.repeat(2000)})),claims:[],experiments:[]});
+  assert.ok(packed.length<=24000);const parsed=JSON.parse(packed);
+  assert.equal(parsed.sources[0].id,'source:0');assert.ok(parsed.sources[0].body.length>0);
+});
+
+test('importer video variants without a MIME field still enqueue transcription', () => {
+  const db=fixture();try{
+    db.run('UPDATE bookmarks SET media_json=? WHERE id=?',[JSON.stringify([{type:'video',url:'https://pbs.twimg.com/preview.jpg',videoVariants:[{bitrate:256000,url:'https://video.twimg.com/clip.mp4'}]}]),'one']);
+    assert.equal(enqueueEnrichment(db,'one'),2);
+    assert.equal(rows(db,"SELECT kind FROM research_jobs WHERE kind='transcript'").length,1);
+    assert.equal(enqueueEnrichment(db,'one'),0);
+  }finally{db.close();}
+});
+
+test('workspace membership changes invalidate cached recall immediately', async () => {
+  const db=fixture();try{
+    assert.equal((await searchResearch(db,'coordination',{topicId:'robots',semantic:false})).hits.length,1);
+    db.run("DELETE FROM brain_space_bookmarks WHERE space_id='robots' AND bookmark_id='one'");
+    assert.equal((await searchResearch(db,'coordination',{topicId:'robots',semantic:false})).hits.length,0);
   }finally{db.close();}
 });

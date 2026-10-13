@@ -67,6 +67,8 @@ export function initResearchStore(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS research_claims_source ON research_claims(source_id)`);
   db.run(`CREATE TABLE IF NOT EXISTS research_wiki_files (path TEXT PRIMARY KEY,mtime REAL NOT NULL)`);
   db.run(`CREATE TABLE IF NOT EXISTS research_agents (id TEXT PRIMARY KEY,name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,spaces_json TEXT NOT NULL,can_write INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+  if(hasTable(db,'brain_space_bookmarks'))for(const event of ['INSERT','UPDATE','DELETE'])db.run(`CREATE TRIGGER IF NOT EXISTS research_membership_${event.toLowerCase()} AFTER ${event} ON brain_space_bookmarks BEGIN
+    UPDATE research_meta SET value=value+1 WHERE key='revision'; END`);
   installSourceTriggers(db);
 }
 
